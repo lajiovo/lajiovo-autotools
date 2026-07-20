@@ -45,12 +45,16 @@ def alas_start():
     print(f"未检测到正在运行的 {AZUR_PROCESS_NAME}，准备拉起...")
     launch_alas_with_admin()
 
-#Experimental /可能有潜在问题
 def alas_cleanup():
-    """全清逻辑：清理 alas 相关的 python 脚本、GUI 界面以及 22267、22268 端口占用"""
+    """全清逻辑：清理 alas 及 azurpilot 相关的 python 脚本、GUI 界面以及 22267、22268 端口占用"""
     print("开始执行 Alas 后台全清...")
     
-    # 1. 清理包含 alas 的 python 进程 和 GUI 进程
+    # 排除关键词（黑名单）：带有这些词的进程绝对不杀
+    EXCLUDE_KEYWORDS = {'auto', 'aiot', 'ide'}
+    # 目标关键词（白名单/必杀词）
+    TARGET_KEYWORDS = {'alas', 'azurpilot'}
+    
+    # 1. 清理包含 alas / azurpilot 的进程，且避开排除项
     print("正在检查相关 Python 进程及 GUI 界面...")
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
@@ -58,13 +62,23 @@ def alas_cleanup():
             cmdline = proc.info['cmdline'] or []
             cmdline_str = " ".join(cmdline).lower()
             
-            # 条件 A: 它是 python 进程，且命令行参数里带有 alas
-            is_alas_py = name_lower.startswith('python') and any('alas' in arg.lower() for arg in cmdline)
+            # 合并进程名和完整命令行进行综合检查
+            full_text = f"{name_lower} {cmdline_str}"
             
-            # 条件 B: 进程名或启动命令里明确带有 alas 或 gui 关键字的 Alas 专用组件
-            is_alas_gui = 'alas' in name_lower or 'alas' in cmdline_str or ('gui' in name_lower and 'alas' in cmdline_str)
+            # 规则 1：检查是否触碰黑名单关键词
+            if any(ex in full_text for ex in EXCLUDE_KEYWORDS):
+                continue
+            
+            # 规则 2：判定是否属于需要清理的目标进程
+            # A: Python 进程且命令行带有目标关键词
+            is_target_py = name_lower.startswith('python') and any(
+                any(kw in arg.lower() for kw in TARGET_KEYWORDS) for arg in cmdline
+            )
+            
+            # B: 进程名或启动命令明确包含目标关键词
+            is_target_gui = any(kw in full_text for kw in TARGET_KEYWORDS)
 
-            if is_alas_py or is_alas_gui:
+            if is_target_py or is_target_gui:
                 print(f"发现目标进程 [{proc.info['name']}] [PID: {proc.pid}]")
                 proc.kill()
                 print(f"-> 已成功强行终止 PID: {proc.pid}")
@@ -83,6 +97,15 @@ def alas_cleanup():
                 if port_pid:
                     try:
                         p = psutil.Process(port_pid)
+                        p_name = p.name().lower()
+                        p_cmdline = " ".join(p.cmdline() or []).lower()
+                        p_full = f"{p_name} {p_cmdline}"
+
+                        # 端口清理同样遵循黑名单拦截，避免误杀 IDE 或安全软件
+                        if any(ex in p_full for ex in EXCLUDE_KEYWORDS):
+                            print(f"端口 {current_port} 占用者 [{p.name()}] 包含排除词，跳过终止。")
+                            continue
+
                         print(f"发现端口 {current_port} 被进程 '{p.name()}' [PID: {port_pid}] 占用，正在终结...")
                         p.kill()
                         print(f"-> 已成功释放端口 {current_port} (终止了 PID: {port_pid})")
