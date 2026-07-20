@@ -45,6 +45,56 @@ def alas_start():
     print(f"未检测到正在运行的 {AZUR_PROCESS_NAME}，准备拉起...")
     launch_alas_with_admin()
 
+#Experimental /可能有潜在问题
+def alas_cleanup():
+    """全清逻辑：清理 alas 相关的 python 脚本、GUI 界面以及 22267、22268 端口占用"""
+    print("开始执行 Alas 后台全清...")
+    
+    # 1. 清理包含 alas 的 python 进程 和 GUI 进程
+    print("正在检查相关 Python 进程及 GUI 界面...")
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            name_lower = proc.info['name'].lower()
+            cmdline = proc.info['cmdline'] or []
+            cmdline_str = " ".join(cmdline).lower()
+            
+            # 条件 A: 它是 python 进程，且命令行参数里带有 alas
+            is_alas_py = name_lower.startswith('python') and any('alas' in arg.lower() for arg in cmdline)
+            
+            # 条件 B: 进程名或启动命令里明确带有 alas 或 gui 关键字的 Alas 专用组件
+            is_alas_gui = 'alas' in name_lower or 'alas' in cmdline_str or ('gui' in name_lower and 'alas' in cmdline_str)
+
+            if is_alas_py or is_alas_gui:
+                print(f"发现目标进程 [{proc.info['name']}] [PID: {proc.pid}]")
+                proc.kill()
+                print(f"-> 已成功强行终止 PID: {proc.pid}")
+                
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    # 2. 清理占用 22267 和 22268 端口的进程
+    TARGET_PORTS = {22267, 22268}
+    print(f"正在检查本地端口 {TARGET_PORTS} 是否被占用...")
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.laddr and conn.laddr.port in TARGET_PORTS:
+                port_pid = conn.pid
+                current_port = conn.laddr.port
+                if port_pid:
+                    try:
+                        p = psutil.Process(port_pid)
+                        print(f"发现端口 {current_port} 被进程 '{p.name()}' [PID: {port_pid}] 占用，正在终结...")
+                        p.kill()
+                        print(f"-> 已成功释放端口 {current_port} (终止了 PID: {port_pid})")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        print(f"尝试终止端口占用进程 [PID: {port_pid}] 时失败，可能权限不足或进程已退出。")
+    except psutil.AccessDenied:
+        print("获取网络连接列表失败，请确保使用管理员权限运行此脚本以清理端口占用。")
+
+    print("Alas 后台全清完毕。")
+
+
 if __name__ == "__main__":
+    #alas_cleanup()
     alas_start()
     print("脚本执行完毕，正在安全退出主程序。")
