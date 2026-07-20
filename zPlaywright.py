@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 
 # 导入您写好的 alas 启动模块与 Mumu 管理模块
-from zAlas import alas_start
+from zAlas import alas_start ,alas_cleanup
 from zMumu import hidemumu, mumu_kill
 
 
@@ -22,9 +22,9 @@ def is_site_accessible(url):
         return False
 
 
-def wait_for_site_ready(url, max_wait_sec=180):
+def wait_for_site_ready(url, max_wait_sec=300):
     """
-    循环检查网页状态。如果未启动则调用 alas_start()，并在最长 3 分钟内等待恢复。
+    循环检查网页状态。如果未启动则调用 alas_start()，并在最长 5 分钟内等待恢复。
     """
     if is_site_accessible(url):
         print("🌐 检测到 127.0.0.1:22267 已在线，无需额外启动。")
@@ -36,7 +36,7 @@ def wait_for_site_ready(url, max_wait_sec=180):
     start_time = time.time()
     while time.time() - start_time < max_wait_sec:
         elapsed = int(time.time() - start_time)
-        print(f"⏳ 正在等待网页响应...（已等待 {elapsed} 秒 / 最多 180 秒）")
+        print(f"⏳ 正在等待网页响应...（已等待 {elapsed} 秒 / 最多 300 秒）")
 
         if is_site_accessible(url):
             print("🎉 检测到网页已恢复在线状态！")
@@ -44,7 +44,11 @@ def wait_for_site_ready(url, max_wait_sec=180):
 
         time.sleep(5)
 
-    print("🚨 错误：已超过 3 分钟网页依然无响应，任务终止。")
+    print("🚨 错误：已超过 5 分钟网页依然无响应，任务终止。")
+    alas_cleanup()
+    print("🚨 警告,结束了azurpilot进程")
+    mumu_kill()
+    print("🚨 警告,结束了mumu进程")
     return False
 
 
@@ -139,7 +143,7 @@ def handle_update_notice(page, target_url):
             print("⏳ 检测到更新动画 SVG (icon-run-update-fly)，Alas 正在执行重启更新...")
             page.wait_for_timeout(3000)
 
-            reboot_timeout = 120
+            reboot_timeout = 300
             start_reboot_time = time.time()
             reboot_success = False
 
@@ -216,10 +220,12 @@ def check_and_start(page, current_dir):
     3. 检查异常错误状态与按钮状态，并执行启动（宽判中英文按钮状态）
     """
     error_svg = page.locator("svg.aside-icon.icon-run-error")
+    erroricon = False
     
     try:
         error_svg.wait_for(state="visible", timeout=2000)
         print("🚨 检测到 Alas 处于运行错误状态 (icon-run-error)！")
+        erroricon = True
         
         if check_mumu_kill_interval(current_dir):
             print("💀 触发 Mumu 重启逻辑，正在执行 mumu_kill()...")
@@ -231,6 +237,7 @@ def check_and_start(page, current_dir):
         
     except Exception:
         print("✨ 未检测到运行错误图标，状态正常。")
+        erroricon = False
 
     # 检测并启动
     target_locator = page.locator("#pywebio-scope-scheduler_btn button")
@@ -249,6 +256,7 @@ def check_and_start(page, current_dir):
 
     except Exception as e:
         print(f"操作启动按钮失败，原因: {e}")
+    return erroricon
 
 
 def main(headless: bool = False):
@@ -257,43 +265,63 @@ def main(headless: bool = False):
     :param headless: 是否采用无头模式（后台打开浏览器）。True 为后台静默运行，False 为显示浏览器界面。
     """
     target_url = "http://127.0.0.1:22267"
+    errorcount = 0
+    errorsolved = True
+    while True:
+        if not wait_for_site_ready(target_url, max_wait_sec=300):
+            return
 
-    if not wait_for_site_ready(target_url, max_wait_sec=180):
-        return
+        with sync_playwright() as p:
+            # 🌟 核心：通过参数 headless 决定是否在后台静默运行
+            browser = p.chromium.launch(headless=headless)
 
-    with sync_playwright() as p:
-        # 🌟 核心：通过参数 headless 决定是否在后台静默运行
-        browser = p.chromium.launch(headless=headless)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            auth_json_path = os.path.join(current_dir, "auth.json")
 
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        auth_json_path = os.path.join(current_dir, "auth.json")
+            storage_data = fix_and_load_storage(auth_json_path)
+            if storage_data:
+                print("正在加载登录凭证...")
+                context = browser.new_context(storage_state=storage_data)
+            else:
+                print("❌ 未在同目录下找到有效 auth.json，将以默认状态打开...")
+                context = browser.new_context()
 
-        storage_data = fix_and_load_storage(auth_json_path)
-        if storage_data:
-            print("正在加载登录凭证...")
-            context = browser.new_context(storage_state=storage_data)
-        else:
-            print("❌ 未在同目录下找到有效 auth.json，将以默认状态打开...")
-            context = browser.new_context()
+            page = context.new_page()
+            page.goto(target_url)
 
-        page = context.new_page()
-        page.goto(target_url)
+            # 1. 处理公告
+            handle_announcement_modal(page)
 
-        # 1. 处理公告
-        handle_announcement_modal(page)
+            # 2. 检查更新流程
+            handle_update_notice(page, target_url)
 
-        # 2. 检查更新流程
-        handle_update_notice(page, target_url)
+            # 3. 检查错误状态并检查启动
+            if check_and_start(page, current_dir):
+                print("大概是有什么错误，让我们等一下吧,10s")
+                errorcount += 1
+                page.wait_for_timeout(10000)
+                if check_and_start(page, current_dir) :
+                    print("看起来还是不行欸，让我们重启alas试试吧")
+                    errorcount += 1
+                    alas_cleanup()
+                    if errorcount <= 2 :
+                        print("将再次进入main循环")
+                    else: 
+                        print("我们放弃吧")
+                        errorsolved = False
+                        break
+                else:
+                    break
+            else:
+                print("Great! Now we skip checking again.")
+                break
 
-        # 3. 检查错误状态并检查启动
-        check_and_start(page, current_dir)
-
-        if not headless :
-            page.wait_for_timeout(2000)
-        else:
-            page.wait_for_timeout(200)
-        browser.close()
-
+            if not headless :
+                page.wait_for_timeout(2000)
+            else:
+                page.wait_for_timeout(200)
+            browser.close()
+    return errorsolved
 
 if __name__ == "__main__":
     # 如果想在后台静默运行，传入 True 即可：main(headless=True)
