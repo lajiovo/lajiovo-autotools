@@ -1,8 +1,19 @@
-from flask import Flask, request
+import os
 import json
+import threading
+from flask import Flask, request
+from zHandler import Handlepush
 
 app = Flask(__name__)
 LISTEN_PORT = 25566
+HANDLEPUSH = True
+
+def shutdown_server():
+    """延迟 0.5 秒关闭整个 Python 进程，确保响应能先返回给请求方"""
+    print("❌ Handlepush 处理失败，准备停止服务...")
+    import time
+    time.sleep(0.5)
+    os._exit(1)  # 强制退出当前 Python 进程
 
 # 推送接收接口，同时支持 GET / POST
 @app.route("/push", methods=["GET", "POST"])
@@ -24,6 +35,20 @@ def receive_push():
     print(json.dumps(msg_dict, ensure_ascii=False, indent=4))
     print("========================================\n")
 
+    if HANDLEPUSH:
+        if not Handlepush(msg_dict):
+            # 1. 启动异步线程准备关闭服务
+            threading.Thread(target=shutdown_server, daemon=True).start()
+            
+            # 2. 返回处理失败的响应给客户端
+            fail_resp = {
+                "status": "error",
+                "code": 500,
+                "message": "推送处理失败，服务即将停止运行",
+                "data": msg_dict
+            }
+            return json.dumps(fail_resp, ensure_ascii=False), 500, {"Content-Type": "application/json"}
+
     # 返回成功响应给推送客户端
     resp = {
         "status": "ok",
@@ -31,6 +56,7 @@ def receive_push():
         "message": "消息接收完成",
         "data": msg_dict
     }
+    
     return json.dumps(resp, ensure_ascii=False), 200, {"Content-Type": "application/json"}
 
 if __name__ == "__main__":
@@ -38,3 +64,4 @@ if __name__ == "__main__":
     print(f"OnePush接收服务已启动，监听端口：{LISTEN_PORT}")
     print(f"访问地址示例：http://127.0.0.1:{LISTEN_PORT}/push")
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=False)
+
