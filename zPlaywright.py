@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 
 # 导入您写好的 alas 启动模块与 Mumu 管理模块
 from zAlas import alas_start ,alas_cleanup
-from zMumu import hidemumu, mumu_kill
+from zMumu import hidemumu, mumu_kill ,is_mumu_running
 
 
 def is_site_accessible(url):
@@ -105,6 +105,18 @@ def handle_announcement_modal(page):
         page.wait_for_timeout(500)
     except Exception:
         print(" 没有检测到公告弹窗，继续。")
+    # 独立弹窗处理块
+    announcement_modal = page.locator("#alas-announcement-modal")
+    try:
+        announcement_modal.wait_for(state="visible", timeout=1000)
+        print("[弹窗处理] 检测到公告弹窗，点击【确认】关闭")
+        confirm_btn = announcement_modal.get_by_text("确认", exact=True)
+        confirm_btn.click()
+        announcement_modal.wait_for(state="hidden", timeout=3000)
+        print("[弹窗处理] 公告弹窗已关闭，遮挡解除")
+    except Exception as modal_err:
+        print(f"[弹窗处理] 无公告弹窗或关闭失败，跳过：{modal_err}")
+
 
 
 def handle_update_notice(page, target_url):
@@ -259,7 +271,7 @@ def check_and_start(page, current_dir):
     return erroricon
 
 
-def main(headless: bool = False):
+def main(headless: bool = True):
     """
     主控流程函数
     :param headless: 是否采用无头模式（后台打开浏览器）。True 为后台静默运行，False 为显示浏览器界面。
@@ -267,6 +279,8 @@ def main(headless: bool = False):
     target_url = "http://127.0.0.1:22267"
     errorcount = 0
     errorsolved = True
+    print("😘保险起见,让我们先启动mumu")
+    hidemumu()
     while True:
         if not wait_for_site_ready(target_url, max_wait_sec=300):
             return
@@ -309,6 +323,7 @@ def main(headless: bool = False):
                     else: 
                         print("我们放弃吧")
                         errorsolved = False
+                        mumu_kill()
                         break
                 else:
                     break
