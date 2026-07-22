@@ -1,363 +1,149 @@
 import zPerseusLogger
-import json
 import os
-import re
+import sys
 import time
-import urllib.request
-from datetime import datetime, timedelta
-from playwright.sync_api import sync_playwright, expect
+import subprocess
+import pyautogui
+import psutil
+import win32gui
 
-# 导入您写好的 alas 启动模块与 Mumu 管理模块
-from zAlas import alas_start ,alas_cleanup
-from zMumu import hidemumu, mumu_kill ,is_mumu_running
-from zBarkCustom import PerseusWarningMsg
+# ==================== 配置常量 ====================
+MUMU_MAIN_PATH = r"\MuMuPlayer\nx_main\MuMuNxMain.exe"
+MUMU_DEVICE_PATH = r"\MuMuPlayer\nx_device\12.0\shell\MuMuNxDevice.exe"
 
+# 是否隐藏窗口控制 (True = 隐藏启动, False = 正常显示启动)
+HIDE_MUMU = False
 
-def is_site_accessible(url):
-    """
-    轻量级检查目标网页是否可访问
-    """
-    try:
-        with urllib.request.urlopen(url, timeout=2) as response:
-            return response.status in (200, 301, 302, 401, 403)
-    except Exception:
+# 核心参数设置
+LOOP_MIN_DURATIONmax = 20  # 窗口检测循环的最少持续时间（秒）
+LOOP_MIN_DURATIONmin = 10
+CHECK_INTERVAL = 2      # 严格间隔 2 秒
+# ==================================================
+
+def mumu_kill():
+    """强制结束所有含 'mumu' 关键词的进程"""
+    print("正在结束所有 MuMu 进程...")
+    for proc in psutil.process_iter(['name']):
+        try:
+            name = proc.info['name'].lower()
+            if "mumu" in name:
+                proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    time.sleep(2)  # 等待进程彻底释放
+    print("MuMu 进程清杀完毕。")
+
+def is_mumu_running():
+    """检查 mumumain 和 mumudevice 是否都在运行"""
+    running_processes = []
+    for proc in psutil.process_iter(['name']):
+        try:
+            running_processes.append(proc.info['name'].lower())
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+            
+    main_running = any("mumunxmain" in p or "mumumain" in p for p in running_processes)
+    device_running = any("mumunxdevice" in p or "mumudevice" in p for p in running_processes)
+    if main_running and device_running :
+        return True
+    else:
         return False
 
+def start_process(path, hide=False):
+    """通用进程启动方法（支持隐藏启动）"""
+    try:
+        if hide and sys.platform == "win32":
+            cmd = f'powershell -ExecutionPolicy Bypass -Command "Start-Process \'{path}\' -WindowStyle Hidden"'
+            subprocess.Popen(cmd, shell=True)
+        else:
+            subprocess.Popen(path)
+        print(f"成功启动进程: {path}")
+    except Exception as e:
+        print(f"启动进程失败 {path}: {e}")
 
-def wait_for_site_ready(url, max_wait_sec=300):
-    """
-    循环检查网页状态。如果未启动则调用 alas_start()，并在最长 5 分钟内等待恢复。
-    """
-    if is_site_accessible(url):
-        print("🌐 检测到 127.0.0.1:22267 已在线，无需额外启动。")
-        return True
+def has_real_mumu_window():
+    """使用 Windows API 过滤：必须是含关键词、肉眼可见、真实大小，且排除 AIoT IDE 的窗口"""
+    window_keywords = ["MuMu", "MuMuPlayer", "MuMuNxMain"]
+    black_keywords = ["aiot ide"]  # 排除黑名单
+    found_real_window = False
 
-    print("❌ 未检测到网页服务，正在调用 alas_start() 启动后台程序...")
-    alas_start()
+    def enum_windows_callback(hwnd, extra):
+        nonlocal found_real_window
+        # 1. 过滤掉不可见的窗口
+        if not win32gui.IsWindowVisible(hwnd):
+            return True
+            
+        title = win32gui.GetWindowText(hwnd).strip()
+        if not title:
+            return True
+            
+        title_lower = title.lower()
 
-    start_time = time.time()
-    while time.time() - start_time < max_wait_sec:
-        elapsed = int(time.time() - start_time)
-        print(f"⏳ 正在等待网页响应...（已等待 {elapsed} 秒 / 最多 300 秒）")
-
-        if is_site_accessible(url):
-            print("🎉 检测到网页已恢复在线状态！")
+        # 2. 核心：如果命中黑名单，直接排除
+        if any(blk in title_lower for blk in black_keywords):
             return True
 
-        time.sleep(5)
-
-    print("🚨 错误：已超过 5 分钟网页依然无响应，任务终止。")
-    alas_cleanup()
-    print("🚨 警告,结束了azurpilot进程")
-    mumu_kill()
-    print("🚨 警告,结束了mumu进程")
-    return False
-
-
-def fix_and_load_storage(json_path):
-    """
-    读取并修正 auth.json 的格式问题，确保所有的 localStorage value 都是字符串。
-    """
-    if not os.path.exists(json_path):
-        return None
+        # 3. 检查是否满足 MuMu 的关键词
+        if any(kw.lower() in title_lower for kw in window_keywords):
+            # 4. 检查窗口大小，排除无画面的后台组件
+            rect = win32gui.GetWindowRect(hwnd)
+            width = rect[2] - rect[0]
+            height = rect[3] - rect[1]
+            if width > 100 and height > 100:
+                print(f"-> 成功捕捉到真实可见窗口: '{title}' [{width}x{height}]")
+                found_real_window = True
+                return False  # 找到了，停止枚举
+        return True
 
     try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        if "origins" in data:
-            for origin in data["origins"]:
-                if "localStorage" in origin:
-                    for item in origin["localStorage"]:
-                        if not isinstance(item.get("value"), str):
-                            item["value"] = json.dumps(
-                                item["value"], ensure_ascii=False
-                            )
-
-        return data
-    except Exception as e:
-        print(f"解析 auth.json 失败: {e}")
-        return None
-
-
-def handle_announcement_modal(page):
-    """
-    1. 检查并处理可能出现的公告弹窗（宽判中英文）
-    """
-    # 宽判匹配：“确认” 或 “Confirm”
-    confirm_regex = re.compile(r"确认|Confirm", re.I)
-    # 宽判匹配标题：“QQ群” 或 “QQ Group” / “QQ”
-    title_regex = re.compile(r"QQ群|QQ\s*Group", re.I)
-
-    # 策略 1：带 ID 的传统定位
-    modal_btn_with_id = page.locator("#alas-announcement-modal button", has_text=confirm_regex)
-
-    # 策略 2：不带 ID，通过标题反向定位按钮
-    modal_btn_by_text = (
-        page.locator("div", has=page.locator("h3", has_text=title_regex))
-        .locator("button", has_text=confirm_regex)
-    )
-
-    try:
-        print("正在检查是否有公告弹窗...")
-        target_btn = modal_btn_with_id.or_(modal_btn_by_text)
-        target_btn.wait_for(state="visible", timeout=2000)
-        target_btn.click()
-        print("🎉 检测到公告弹窗，已点击【确认/Confirm】关闭！")
-        page.wait_for_timeout(500)
+        win32gui.EnumWindows(enum_windows_callback, None)
     except Exception:
-        print(" 没有检测到公告弹窗，继续。")
-    # 独立弹窗处理块
-    announcement_modal = page.locator("#alas-announcement-modal")
-    try:
-        announcement_modal.wait_for(state="visible", timeout=10000)
-        print("[弹窗处理] 检测到公告弹窗，点击【确认】关闭")
-        confirm_btn = announcement_modal.get_by_text("确认", exact=True)
-        confirm_btn.click()
-        announcement_modal.wait_for(state="hidden", timeout=3000)
-        print("[弹窗处理] 公告弹窗已关闭，遮挡解除")
-    except Exception as modal_err:
-        print(f"[弹窗处理] 无公告弹窗或关闭失败，跳过：{modal_err}")
+        pass
+        
+    return found_real_window
 
-
-
-def handle_update_notice(page, target_url):
-    """
-    2. 检查并执行更新流程（包含对更新重启重载页面的检测，宽判中英文）
-    """
-    update_notice = page.locator("#alas-update-notice")
+def hidemumu():
+    """启动 MuMu 并检测窗口进行隐藏快捷键操作"""
+    global HIDE_MUMU
     
-    # 宽判匹配：“立即更新” 或 “Update Now”
-    update_btn = page.locator("#alas-update-notice button", has_text=re.compile(r"立即更新|Update\s*Now", re.I))
-
-    try:
-        print("正在检查是否有新版本更新提示...")
-        update_notice.wait_for(state="visible", timeout=5000)
-        print("📢 发现新版本更新提示！正在点击【立即更新/Update Now】...")
-        update_btn.click()
-
-        # 进入更新页面，等待状态显示
-        updater_state = page.locator("#pywebio-scope-updater_state")
-        updater_state.wait_for(state="visible", timeout=10000)
-        print(f"当前更新页面状态: {updater_state.text_content().strip()}")
-
-        # 宽判匹配：“进行更新” 或 “Update Now” 或 “Update”
-        start_update_btn = page.locator(
-            "#pywebio-scope-updater_btn button", 
-            has_text=re.compile(r"进行更新|Update\s*Now|Update", re.I)
-        )
-        start_update_btn.wait_for(state="visible", timeout=5000)
-        start_update_btn.click()
-        print("🚀 已点击【进行更新/Update Now】，开始检测是否启动更新重启...")
-
-        updating_svg = page.locator("svg.aside-icon.icon-run-update-fly")
-
-        try:
-            updating_svg.wait_for(state="visible", timeout=5000)
-            print("⏳ 检测到更新动画 SVG (icon-run-update-fly)，Alas 正在执行重启更新...")
-            page.wait_for_timeout(3000)
-
-            reboot_timeout = 300
-            start_reboot_time = time.time()
-            reboot_success = False
-
-            while time.time() - start_reboot_time < reboot_timeout:
-                elapsed = int(time.time() - start_reboot_time)
-                if is_site_accessible(target_url):
-                    print(f"🎉 经过 {elapsed} 秒，检测到 Alas 服务已成功重启在线！")
-                    reboot_success = True
-                    break
-                print(f"  └─ 正在等待后台服务重启中...（已等待 {elapsed} 秒）")
-                time.sleep(3)
-
-            if not reboot_success:
-                print("🚨 警告：更新后服务超时未重新在线！将直接尝试刷新页面...")
-
-            print("🔄 正在刷新页面以重载页面状态...")
-            page.reload()
-            page.wait_for_load_state("networkidle")
-
-        except Exception:
-            print(" 未检测到更新重启动画，进行常规等待 1 秒。")
-            page.wait_for_timeout(1000)
-
-        # 返回 alas 主界面（宽判匹配：不区分大小写的 "alas"）
-        back_to_alas_btn = page.locator("button.btn-aside", has_text=re.compile(r"alas", re.I))
-        back_to_alas_btn.wait_for(state="visible", timeout=5000)
-        back_to_alas_btn.click()
-        print("🔙 已点击返回 alas 主界面。")
-        page.wait_for_timeout(1000)
-
-    except Exception as e:
-        print(f" 未检测到更新提示、无需更新或执行出错: {e}")
-
-
-def check_mumu_kill_interval(current_dir):
-    """
-    检查同目录下 latest_mumu_kill.txt 记录的时间是否超过2天。
-    """
-    record_file = os.path.join(current_dir, "latest_mumu_kill.txt")
-    time_format = "%Y-%m-%d %H:%M:%S"
-    now = datetime.now()
-
-    if os.path.exists(record_file):
-        try:
-            with open(record_file, "r", encoding="utf-8") as f:
-                last_time_str = f.read().strip()
-            last_time = datetime.strptime(last_time_str, time_format)
-            
-            if now - last_time >= timedelta(days=2):
-                print(f"🕒 上次执行 mumu_kill 时间为 {last_time_str}，已超过 2 天。")
-                need_kill = True
-            else:
-                print(f"🕒 上次执行 mumu_kill 时间为 {last_time_str}，未满 2 天，略过重启 MuMu。")
-                need_kill = False
-        except Exception as e:
-            print(f"⚠️ 解析记录文件失败（格式有误），将默认执行重启: {e}")
-            need_kill = True
+    # 1. 检查关键进程是否在运行
+    if not is_mumu_running():
+        print("检测到 mumumain 或 mumudevice 未在运行")
+        LOOP_MIN_DURATION = LOOP_MIN_DURATIONmax
+        # 2. 启动 MuMu Main 和 Device
+        print(f"开始处理 MuMu 自动化启动（隐藏模式: {HIDE_MUMU}）...")
+        start_process(MUMU_MAIN_PATH, hide=HIDE_MUMU)
+        start_process(MUMU_DEVICE_PATH, hide=HIDE_MUMU)
     else:
-        print("📄 未检测到 latest_mumu_kill.txt 历史记录，将执行首次重启记录。")
-        need_kill = True
-
-    if need_kill:
-        try:
-            with open(record_file, "w", encoding="utf-8") as f:
-                f.write(now.strftime(time_format))
-        except Exception as e:
-            print(f"⚠️ 写入 latest_mumu_kill.txt 失败: {e}")
-            
-    return need_kill
-
-
-def check_and_start(page, current_dir):
-    """
-    3. 检查异常错误状态与按钮状态，并执行启动（宽判中英文按钮状态）
-    """
-    error_svg = page.locator("svg.aside-icon.icon-run-error")
-    erroricon = False
+        LOOP_MIN_DURATION = LOOP_MIN_DURATIONmin
     
-    try:
-        error_svg.wait_for(state="visible", timeout=3000)
-        print("🚨 检测到 Alas 处于运行错误状态 (icon-run-error)！")
-        erroricon = True
-        
-        if check_mumu_kill_interval(current_dir):
-            print("💀 触发 Mumu 重启逻辑，正在执行 mumu_kill()...")
-            mumu_kill()
-            page.wait_for_timeout(2000)
-            print("🖥️ 正在调用 hidemumu() 重新隐藏/拉起...")
-            hidemumu()
-            page.wait_for_timeout(20000)
-        
-    except Exception:
-        print("✨ 未检测到运行错误图标，状态正常。")
-        erroricon = False
-
-    # 检测并启动
-    target_locator = page.locator("#pywebio-scope-scheduler_btn button")
-    try:
-        target_locator.wait_for(state="visible", timeout=5000)
-        btn_text = target_locator.text_content().strip()
-        print(f"当前主界面按钮状态为: '{btn_text}'")
-
-        # 1. 如果已经是停止状态
-        if btn_text.lower() in ["停止", "stop"]:
-            print(f"当前状态为【{btn_text}】，无需点击。")
-
-        # 2. 如果是启动状态，点击并确认状态是否成功切换
-        elif btn_text.lower() in ["启动", "start"]:
-            print("检测到状态为【启动/Start】，正在点击按钮...")
-            target_locator.click()
-            # 定义“停止按钮”的新定位器（利用 text 属性寻找）
-            stop_btn_locator = page.locator("#pywebio-scope-scheduler_btn button", has_text=re.compile(r"停止|stop", re.IGNORECASE))
-            try:
-                # 等待包含“停止/stop”字样的按钮出现
-                stop_btn_locator.wait_for(state="visible", timeout=8000)
-                print("👉 确认切换：检测到了【停止/stop】按钮！")
-            except Exception:
-                print(f"⚠️ 等待超时，界面可能未刷新。当前按钮文本: '{target_locator.text_content().strip()}'")
-                PerseusWarningMsg("Scheduler Start Failed", "")
-                erroricon = True
-                
-        # 3. 其它未知状态
-        else:
-            print("未知按键状态，怎么回事呢")
-            PerseusWarningMsg("Unknown Scheduler Button", f"内容为{btn_text}")
-
-    except Exception as e:
-        print(f"操作启动按钮失败，原因: {e}")
-    return erroricon
-
-
-def main(headless: bool = True , mummu_hide :bool = True):
-    """
-    主控流程函数
-    :param headless: 是否采用无头模式（后台打开浏览器）。True 为后台静默运行，False 为显示浏览器界面。
-    """
-    target_url = "http://127.0.0.1:22267"
-    errorcount = 0
-    errorsolved = True
-    if mummu_hide :
-        print("😘保险起见,让我们先启动mumu")
-        hidemumu()
+    # 3. 循环检测窗口并发送快捷键
+    print(f"进入窗口检测循环，检测间隔 {CHECK_INTERVAL}s，至少持续 {LOOP_MIN_DURATION} 秒...")
+    
+    start_time = time.time()
+    
     while True:
-        if not wait_for_site_ready(target_url, max_wait_sec=300):
-            return
-
-        with sync_playwright() as p:
-            # 🌟 核心：通过参数 headless 决定是否在后台静默运行
-            browser = p.chromium.launch(headless=headless)
-
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            auth_json_path = os.path.join(current_dir, "auth.json")
-
-            storage_data = fix_and_load_storage(auth_json_path)
-            if storage_data:
-                print("正在加载登录凭证...")
-                context = browser.new_context(storage_state=storage_data)
-            else:
-                print("❌ 未在同目录下找到有效 auth.json，将以默认状态打开...")
-                context = browser.new_context()
-
-            page = context.new_page()
-            page.goto(target_url)
-
-            # 1. 处理公告
-            handle_announcement_modal(page)
-
-            # 2. 检查更新流程
-            handle_update_notice(page, target_url)
-
-            # 3. 检查错误状态并检查启动
-            if check_and_start(page, current_dir):
-                print("大概是有什么错误，让我们等一下吧,10s")
-                errorcount += 1
-                page.wait_for_timeout(10000)
-                if check_and_start(page, current_dir) :
-                    print("看起来还是不行欸，让我们重启alas试试吧")
-                    errorcount += 1
-                    alas_cleanup()
-                    alas_start()
-                    if errorcount <= 2 :
-                        print("将再次进入main循环")
-                    else: 
-                        print("我们放弃吧")
-                        errorsolved = False
-                        mumu_kill()
-                        break
-                else:
-                    break
-            else:
-                print("Great! Now we skip checking again.")
+        elapsed_time = time.time() - start_time
+        
+        # 精确检查是否存在肉眼可见的 MuMu 窗口
+        window_exists = has_real_mumu_window()
+        
+        if window_exists:
+            print(f"[{int(elapsed_time)}s] 确实存在 MuMu 实体窗口，正在发送快捷键: Ctrl + Alt + Right")
+            pyautogui.hotkey('ctrl', 'alt', 'right')
+        else:
+            print(f"[{int(elapsed_time)}s] 当前未检测到真实的 MuMu 实体窗口...")
+            # 如果已经超过最少持续时间且无窗口，退出循环
+            if elapsed_time >= LOOP_MIN_DURATION:
+                print(f"已满 {LOOP_MIN_DURATION} 秒且未检测到窗口，安全退出循环。")
                 break
-
-            if not headless :
-                page.wait_for_timeout(2000)
-            else:
-                page.wait_for_timeout(200)
-            browser.close()
-    return errorsolved
+                
+        # 严格保持每次检测/操作间隔 2 秒
+        time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
-    # 如果想在后台静默运行，传入 True 即可：main(headless=True)
-    main(headless=True,mummu_hide=False)
+    # 如果需要先清理环境，可以在这里手动调用 mumu_kill()
+    # mumu_kill()
+    
+    hidemumu()
+    print("脚本执行完毕。")
