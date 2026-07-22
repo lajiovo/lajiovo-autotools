@@ -1,14 +1,16 @@
+import zPerseusLogger
 import json
 import os
 import re
 import time
 import urllib.request
 from datetime import datetime, timedelta
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 # 导入您写好的 alas 启动模块与 Mumu 管理模块
 from zAlas import alas_start ,alas_cleanup
 from zMumu import hidemumu, mumu_kill ,is_mumu_running
+from zBarkCustom import PerseusWarningMsg
 
 
 def is_site_accessible(url):
@@ -108,7 +110,7 @@ def handle_announcement_modal(page):
     # 独立弹窗处理块
     announcement_modal = page.locator("#alas-announcement-modal")
     try:
-        announcement_modal.wait_for(state="visible", timeout=1000)
+        announcement_modal.wait_for(state="visible", timeout=10000)
         print("[弹窗处理] 检测到公告弹窗，点击【确认】关闭")
         confirm_btn = announcement_modal.get_by_text("确认", exact=True)
         confirm_btn.click()
@@ -130,28 +132,28 @@ def handle_update_notice(page, target_url):
 
     try:
         print("正在检查是否有新版本更新提示...")
-        update_notice.wait_for(state="visible", timeout=2000)
+        update_notice.wait_for(state="visible", timeout=5000)
         print("📢 发现新版本更新提示！正在点击【立即更新/Update Now】...")
         update_btn.click()
 
         # 进入更新页面，等待状态显示
         updater_state = page.locator("#pywebio-scope-updater_state")
-        updater_state.wait_for(state="visible", timeout=5000)
+        updater_state.wait_for(state="visible", timeout=10000)
         print(f"当前更新页面状态: {updater_state.text_content().strip()}")
 
-        # 宽判匹配：“进行更新” 或 “Run Update” 或 “Update”
+        # 宽判匹配：“进行更新” 或 “Update Now” 或 “Update”
         start_update_btn = page.locator(
             "#pywebio-scope-updater_btn button", 
-            has_text=re.compile(r"进行更新|Run\s*Update|Update", re.I)
+            has_text=re.compile(r"进行更新|Update\s*Now|Update", re.I)
         )
-        start_update_btn.wait_for(state="visible", timeout=3000)
+        start_update_btn.wait_for(state="visible", timeout=5000)
         start_update_btn.click()
-        print("🚀 已点击【进行更新/Run Update】，开始检测是否启动更新重启...")
+        print("🚀 已点击【进行更新/Update Now】，开始检测是否启动更新重启...")
 
         updating_svg = page.locator("svg.aside-icon.icon-run-update-fly")
 
         try:
-            updating_svg.wait_for(state="visible", timeout=3000)
+            updating_svg.wait_for(state="visible", timeout=5000)
             print("⏳ 检测到更新动画 SVG (icon-run-update-fly)，Alas 正在执行重启更新...")
             page.wait_for_timeout(3000)
 
@@ -176,8 +178,8 @@ def handle_update_notice(page, target_url):
             page.wait_for_load_state("networkidle")
 
         except Exception:
-            print(" 未检测到更新重启动画，进行常规等待 3 秒。")
-            page.wait_for_timeout(3000)
+            print(" 未检测到更新重启动画，进行常规等待 1 秒。")
+            page.wait_for_timeout(1000)
 
         # 返回 alas 主界面（宽判匹配：不区分大小写的 "alas"）
         back_to_alas_btn = page.locator("button.btn-aside", has_text=re.compile(r"alas", re.I))
@@ -235,7 +237,7 @@ def check_and_start(page, current_dir):
     erroricon = False
     
     try:
-        error_svg.wait_for(state="visible", timeout=2000)
+        error_svg.wait_for(state="visible", timeout=3000)
         print("🚨 检测到 Alas 处于运行错误状态 (icon-run-error)！")
         erroricon = True
         
@@ -258,20 +260,36 @@ def check_and_start(page, current_dir):
         btn_text = target_locator.text_content().strip()
         print(f"当前主界面按钮状态为: '{btn_text}'")
 
-        # 宽判支持：匹配 "启动" 或 "Start" (不区分大小写)
-        if btn_text.lower() in ["启动", "Start"]:
+        # 1. 如果已经是停止状态
+        if btn_text.lower() in ["停止", "stop"]:
+            print(f"当前状态为【{btn_text}】，无需点击。")
+
+        # 2. 如果是启动状态，点击并确认状态是否成功切换
+        elif btn_text.lower() in ["启动", "start"]:
             print("检测到状态为【启动/Start】，正在点击按钮...")
             target_locator.click()
-            print("👉 已成功点击启动！")
+            # 定义“停止按钮”的新定位器（利用 text 属性寻找）
+            stop_btn_locator = page.locator("#pywebio-scope-scheduler_btn button", has_text=re.compile(r"停止|stop", re.IGNORECASE))
+            try:
+                # 等待包含“停止/stop”字样的按钮出现
+                stop_btn_locator.wait_for(state="visible", timeout=8000)
+                print("👉 确认切换：检测到了【停止/stop】按钮！")
+            except Exception:
+                print(f"⚠️ 等待超时，界面可能未刷新。当前按钮文本: '{target_locator.text_content().strip()}'")
+                PerseusWarningMsg("Scheduler Start Failed", "")
+                erroricon = True
+                
+        # 3. 其它未知状态
         else:
-            print(f"当前状态为【{btn_text}】，无需点击。")
+            print("未知按键状态，怎么回事呢")
+            PerseusWarningMsg("Unknown Scheduler Button", f"内容为{btn_text}")
 
     except Exception as e:
         print(f"操作启动按钮失败，原因: {e}")
     return erroricon
 
 
-def main(headless: bool = True):
+def main(headless: bool = True , mummu_hide :bool = True):
     """
     主控流程函数
     :param headless: 是否采用无头模式（后台打开浏览器）。True 为后台静默运行，False 为显示浏览器界面。
@@ -279,8 +297,9 @@ def main(headless: bool = True):
     target_url = "http://127.0.0.1:22267"
     errorcount = 0
     errorsolved = True
-    print("😘保险起见,让我们先启动mumu")
-    hidemumu()
+    if mummu_hide :
+        print("😘保险起见,让我们先启动mumu")
+        hidemumu()
     while True:
         if not wait_for_site_ready(target_url, max_wait_sec=300):
             return
@@ -318,6 +337,7 @@ def main(headless: bool = True):
                     print("看起来还是不行欸，让我们重启alas试试吧")
                     errorcount += 1
                     alas_cleanup()
+                    alas_start()
                     if errorcount <= 2 :
                         print("将再次进入main循环")
                     else: 
@@ -340,4 +360,4 @@ def main(headless: bool = True):
 
 if __name__ == "__main__":
     # 如果想在后台静默运行，传入 True 即可：main(headless=True)
-    main(headless=True)
+    main(headless=True,mummu_hide=False)
