@@ -1,3 +1,4 @@
+import zPerseusLogger
 import re
 import traceback
 from zBarkCustom import PerseusErrorMsg, PerseusNotifyMsg, PerseusWarningMsg
