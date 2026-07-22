@@ -1,37 +1,40 @@
 from zBark import bark ,barkall
 
-DEVICEKEYLIST = ["xxxxxx"]
+DEVICEKEYLIST = ["xxxxx"]
 ALARMSOUND = "alarm"
 NORMALSOUND = "alarm"
+ICON1 = "https://patchwiki.biligame.com/images/blhx/0/05/3bi61qmjssvlemdug8rag683vcj2ziy.png"
+ICON2 = "https://patchwiki.biligame.com/images/blhx/0/0f/m5rycu93qc94r5lyst8862wnbvehjle.png"
+ICON3 = "https://patchwiki.biligame.com/images/blhx/9/9a/onh0ri4tx1wjuhhtxegjqqcobv7wdjc.png"
 
 def PerseusWarningMsg(main:str,msg:str):
     return barkall(DEVICEKEYLIST,
         title=f"WARNING:{main}",
         body=msg,
-        url="http://192.168.10.3:22267",
         group="Perseus",
         sound=ALARMSOUND,
         level="timesensitive",
+        icon = ICON1
         )
 
 def PerseusErrorMsg(main:str,msg:str):
     return barkall(DEVICEKEYLIST,
         title=f"ERROR:{main}",
         body=msg,
-        url="http://192.168.10.3:22267",
         group="Perseus",
         sound=ALARMSOUND,
         level="timesensitive",
+        icon =  ICON3
         )
 
 def PerseusNotifyMsg(main:str,msg:str):
     return barkall(DEVICEKEYLIST,
         title=f"Notice:{main}",
         body=msg,
-        url="http://192.168.10.3:22267",
         group="Perseus",
         sound=NORMALSOUND,
         level="passive",
+        icon= ICON2
         )
 
 def CustomMsg(title:str,msg:str,group:str):
@@ -41,7 +44,8 @@ def CustomMsg(title:str,msg:str,group:str):
         group=group,
         sound=ALARMSOUND,
         level="passive",
-        copy=msg
+        copy=msg,
+        icon = ICON2
         )
 
 if __name__ == "__main__":
