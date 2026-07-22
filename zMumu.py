@@ -1,3 +1,4 @@
+import zPerseusLogger
 import os
 import sys
 import time
