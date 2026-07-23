@@ -4,6 +4,8 @@ import sys
 import ctypes
 import subprocess
 import psutil
+from zHideAlas import smart_hide_azurpilot
+from zBarkCustom import PerseusErrorMsg,PerseusNotifyMsg
 
 # ==================== 配置常量 ====================
 ALAS_PATH = r"\AzurPilot\alas-launcher.exe"
@@ -45,6 +47,12 @@ def alas_start():
     # 2. 如果不存在，则启动它
     print(f"未检测到正在运行的 {AZUR_PROCESS_NAME}，准备拉起...")
     launch_alas_with_admin()
+    ikun = smart_hide_azurpilot(retry_interval=2)
+    if ikun == 1:
+        PerseusNotifyMsg("Success with smart_hide_azurpilot()","")
+    else:
+        PerseusErrorMsg("Bug with smart_hide_azurpilot()",f"{ikun}")
+
 
 def alas_cleanup():
     """全清逻辑：清理 alas 及 azurpilot 相关的 python 脚本、GUI 界面以及 22267、22268 端口占用"""
