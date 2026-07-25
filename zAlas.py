@@ -1,16 +1,99 @@
-import zPerseusLogger
-import os
-import sys
 import ctypes
+import os
 import subprocess
+import sys
 import psutil
+from zBarkCustom import PerseusErrorMsg, PerseusNotifyMsg
 from zHideAlas import smart_hide_azurpilot
-from zBarkCustom import PerseusErrorMsg,PerseusNotifyMsg
+import zPerseusLogger
 
 # ==================== 配置常量 ====================
 ALAS_PATH = r"\AzurPilot\alas-launcher.exe"
 AZUR_PROCESS_NAME = "alas-launcher.exe"  # AzurPilot 的进程名
 # ==================================================
+
+def is_admin():
+    """检测当前 Python 进程是否已拥有管理员权限"""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+def launch_alas_with_admin(alas_path=ALAS_PATH, show_window=True):
+    """先检测当前权限，再完全解绑/剥离启动 Alas (alas-launcher.exe)
+
+    :param alas_path: alas-launcher.exe 的完整路径
+    :param show_window: 是否显示窗口（True 为带窗口，False 为完全隐藏）
+    """
+    if not os.path.exists(alas_path):
+        error_msg = f"未找到 Alas 可执行文件，路径不存在: {alas_path}"
+        print(f"[错误] {error_msg}")
+        try:
+            PerseusErrorMsg(error_msg)
+        except Exception:
+            pass
+        return False
+
+    alas_dir = os.path.dirname(os.path.abspath(alas_path))
+
+    # Win32 进程创建标志（内核级脱离当前控制台组/进程树）
+    CREATE_NEW_CONSOLE = 0x00000010
+    DETACHED_PROCESS = 0x00000008
+
+    try:
+        if is_admin():
+            print(f"[已具备管理员权限] 正在彻底剥离启动 Alas: {alas_path}")
+
+            creationflags = (
+                CREATE_NEW_CONSOLE if show_window else DETACHED_PROCESS
+            )
+
+            # 使用 Popen 直接调起 .exe，完全解绑父子进程生命周期
+            subprocess.Popen(
+                [alas_path],
+                cwd=alas_dir,
+                creationflags=creationflags,
+                close_fds=True,
+            )
+
+            print("Alas 已成功剥离独立启动。")
+            return True
+
+        else:
+            print(
+                f"[未具备管理员权限] 正在请求 UAC 提权并分离启动: {alas_path}"
+            )
+
+            # SW_SHOWNORMAL (1) 显示窗口，SW_HIDE (0) 隐藏窗口
+            show_cmd = 1 if show_window else 0
+
+            # 参数说明: hwnd, operation("runas"), file, parameters, directory, ShowCmd
+            result = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", alas_path, None, alas_dir, show_cmd
+            )
+
+            # 返回值大于 32 说明 Shell 成功响应并发送启动指令
+            if result > 32:
+                print("Alas 提权启动请求已成功发送。")
+                return True
+            else:
+                error_msg = f"提权被拒绝或启动失败，ShellExecuteW 返回码: {result}"
+                print(f"[错误] {error_msg}")
+                try:
+                    PerseusErrorMsg(error_msg)
+                except Exception:
+                    pass
+                return False
+
+    except Exception as e:
+        error_msg = f"启动 Alas 过程出现异常: {e}"
+        print(f"[异常] {error_msg}")
+        try:
+            PerseusErrorMsg(error_msg)
+        except Exception:
+            pass
+        return False
+
 
 def is_process_running(process_name):
     """检测指定名称的进程是否已经在运行"""
