@@ -5,9 +5,10 @@ import json
 import time
 import subprocess
 import threading
-from flask import Flask, request
+from flask import Flask, request, send_from_directory
 from zPushhandler import Handlepush
-from zBarkCustom import PerseusNotifyMsg , PerseusErrorMsg
+from zBarkCustom import PerseusNotifyMsg, PerseusErrorMsg
+from zRunHandler import handlerun
 
 app = Flask(__name__)
 LISTEN_PORT = 25566
@@ -59,11 +60,8 @@ def shutdown_server():
 def receive_push():
     # 合并三种传参方式：GET参数、POST表单、POST JSON
     msg_dict = {}
-    # GET url 参数
     msg_dict.update(request.args.to_dict())
-    # POST 表单 x-www-form-urlencoded
     msg_dict.update(request.form.to_dict())
-    # POST json 请求体
     if request.is_json:
         msg_dict.update(request.get_json())
 
@@ -98,6 +96,52 @@ def receive_push():
     
     return json.dumps(resp, ensure_ascii=False), 200, {"Content-Type": "application/json"}
 
+
+# ==================== 新增路由: /help 网页请求 ====================
+@app.route("/help", methods=["GET"])
+def get_help():
+    """返回 WebHome.html 页面"""
+    # 默认寻找当前脚本运行目录下的 WebHome.html
+    # 如果文件在 templates 子目录下，可以使用 render_template('WebHome.html')
+    html_dir = os.path.dirname(os.path.abspath(__file__))
+    html_filename = "WebHome.html"
+    
+    if not os.path.exists(os.path.join(html_dir, html_filename)):
+        return f"HTML文件未找到: {html_filename}", 404
+        
+    return send_from_directory(html_dir, html_filename)
+
+
+# ==================== 新增路由: /run 预处理请求 ====================
+@app.route("/run", methods=["GET", "POST"])
+def handle_run():
+    """接收 /run 请求，对 onpush 消息进行预处理"""
+    req_data = {}
+    req_data.update(request.args.to_dict())
+    req_data.update(request.form.to_dict())
+    if request.is_json:
+        json_data = request.get_json(silent=True)
+        if json_data:
+            req_data.update(json_data)
+
+    print("\n========================================")
+    print("【/run 收到消息】内容：")
+    print(json.dumps(req_data, ensure_ascii=False, indent=4))
+    print("========================================\n")
+
+    # 1. 调用预留的预处理函数
+    process_result = handlerun(req_data)
+
+    # 2. 返回结果响应
+    resp = {
+        "status": "ok" if process_result[0] else "error",
+        "code": 200 if process_result[0] else 500,
+        "message": f"{process_result[1]}",
+        "data": req_data
+    }
+    return json.dumps(resp, ensure_ascii=False), resp["code"], {"Content-Type": "application/json"}
+
+
 def main():
     """独立的服务启动主入口"""
     # 1. 检查并结束占用 25566 端口的原进程
@@ -110,6 +154,8 @@ def main():
         f"服务已成功绑定端口 {LISTEN_PORT} 并开始监听请求。"
     )
     print(f"访问地址示例：http://127.0.0.1:{LISTEN_PORT}/push")
+    print(f"帮助页面地址：http://127.0.0.1:{LISTEN_PORT}/help")
+    print(f"运行接口地址：http://127.0.0.1:{LISTEN_PORT}/run")
 
     # 3. 运行 Flask 实例
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=False)
