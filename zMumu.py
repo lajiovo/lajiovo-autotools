@@ -1,12 +1,14 @@
 import os
 import sys
 import time
+import ctypes
 import subprocess
 import traceback
 import psutil
 import win32gui
+import win32con
 from pynput.keyboard import Key, Controller
-import zPerseusLogger
+from zBarkCustom import PerseusNotifyMsg, PerseusErrorMsg, PerseusWarningMsg
 
 # 初始化 pynput 键盘控制器
 keyboard = Controller()
@@ -25,6 +27,26 @@ CHECK_INTERVAL = 2       # 严格间隔 2 秒
 HIDE_TIMEOUT = 30        # 尝试隐藏超时限制（秒）
 MAX_ATTEMPTS = 2         # 最多尝试次数（初始 1 次 + kill 后重试 1 次）
 # ==================================================
+
+def is_admin():
+    """检查当前程序是否以系统管理员权限运行"""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+def run_as_admin():
+    """如果当前不是管理员权限，重新以管理员身份运行当前脚本"""
+    if not is_admin():
+        print("正在尝试获取系统管理员权限提权...")
+        try:
+            # 重新以管理员权限启动当前 python 脚本
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", sys.executable, " ".join(f'"{arg}"' for arg in sys.argv), None, 1
+            )
+            sys.exit(0)
+        except Exception as e:
+            print(f"获取管理员权限失败: {e}")
 
 def mumu_kill():
     """强制结束所有含 'mumu' 关键词的进程"""
@@ -62,17 +84,20 @@ def start_process(path, hide=False):
             subprocess.Popen(path)
         print(f"成功启动进程: {path}")
     except Exception as e:
-        print(f"启动进程失败 {path}: {e}")
+        err_msg = f"启动进程失败 {path}: {e}"
+        print(err_msg)
+        try:
+            PerseusErrorMsg("MuMu Launch Error", err_msg)
+        except Exception:
+            pass
 
-def has_real_mumu_window():
-    """使用 Windows API 过滤：必须是含关键词、肉眼可见、真实大小，且排除 AIoT IDE 的窗口"""
+def get_real_mumu_hwnds():
+    """获取所有符合条件的真实可见 MuMu 窗口句柄列表"""
     window_keywords = ["MuMu", "MuMuPlayer", "MuMuNxMain"]
     black_keywords = ["aiot ide"]  # 排除黑名单
-    found_real_window = False
+    hwnds = []
 
     def enum_windows_callback(hwnd, extra):
-        nonlocal found_real_window
-        # 1. 过滤掉不可见的窗口
         if not win32gui.IsWindowVisible(hwnd):
             return True
             
@@ -82,20 +107,19 @@ def has_real_mumu_window():
             
         title_lower = title.lower()
 
-        # 2. 核心：如果命中黑名单，直接排除
+        # 核心：如果命中黑名单，排除
         if any(blk in title_lower for blk in black_keywords):
             return True
 
-        # 3. 检查是否满足 MuMu 的关键词
+        # 检查是否满足 MuMu 的关键词
         if any(kw.lower() in title_lower for kw in window_keywords):
-            # 4. 检查窗口大小，排除无画面的后台组件
+            # 检查窗口大小，排除无画面的后台组件
             rect = win32gui.GetWindowRect(hwnd)
             width = rect[2] - rect[0]
             height = rect[3] - rect[1]
             if width > 100 and height > 100:
-                print(f"-> 成功捕捉到真实可见窗口: '{title}' [{width}x{height}]")
-                found_real_window = True
-                return False  # 找到了，停止枚举
+                print(f"-> 捕捉到窗口: '{title}' [{width}x{height}] HWND: {hwnd}")
+                hwnds.append(hwnd)
         return True
 
     try:
@@ -103,10 +127,19 @@ def has_real_mumu_window():
     except Exception:
         pass
         
-    return found_real_window
+    return hwnds
+
+def hide_hwnd_admin(hwnd):
+    """使用 Win32 API 强制隐藏指定 HWND 的窗口"""
+    try:
+        # SW_HIDE = 0
+        ctypes.windll.user32.ShowWindow(hwnd, win32con.SW_HIDE)
+        print(f"  └─ 已调用系统 API 强制隐藏句柄 HWND: {hwnd}")
+    except Exception as e:
+        print(f"  └─ API 隐藏句柄 {hwnd} 失败: {e}")
 
 def send_hide_hotkey():
-    """使用 pynput 安全发送 Ctrl + Alt + Right 快捷键"""
+    """使用 pynput 发送 Ctrl + Alt + Right 快捷键"""
     with keyboard.pressed(Key.ctrl), keyboard.pressed(Key.alt):
         keyboard.press(Key.right)
         keyboard.release(Key.right)
@@ -126,7 +159,7 @@ def hidemumu_attempt():
     else:
         loop_min_duration = LOOP_MIN_DURATIONmin
     
-    # 3. 循环检测窗口并发送快捷键
+    # 3. 循环检测窗口并执行组合技
     print(f"进入窗口检测循环，检测间隔 {CHECK_INTERVAL}s，最少持续 {loop_min_duration}s，超时限制 {HIDE_TIMEOUT}s...")
     
     start_time = time.time()
@@ -139,11 +172,18 @@ def hidemumu_attempt():
             print(f"⚠️ [警告] 尝试隐藏超时（已耗时 {int(elapsed_time)}s > {HIDE_TIMEOUT}s），本次隐藏失败！")
             return False
 
-        # 精确检查是否存在肉眼可见的 MuMu 窗口
-        window_exists = has_real_mumu_window()
+        # 精确获取肉眼可见的 MuMu 窗口句柄
+        mumu_hwnds = get_real_mumu_hwnds()
         
-        if window_exists:
-            print(f"[{int(elapsed_time)}s] 确实存在 MuMu 实体窗口，正在发送快捷键: Ctrl + Alt + Right")
+        if mumu_hwnds:
+            print(f"[{int(elapsed_time)}s] 确实存在 {len(mumu_hwnds)} 个 MuMu 实体窗口，触发组合技 (管理员API隐藏 + 快捷键)...")
+            
+            # 【组合技 1】：利用管理员 API 权限强制隐藏每一个找到的句柄
+            for hwnd in mumu_hwnds:
+                hide_hwnd_admin(hwnd)
+            
+            # 【组合技 2】：发送系统全局快捷键
+            print(f"  └─ 发送快捷键: Ctrl + Alt + Right")
             send_hide_hotkey()
         else:
             print(f"[{int(elapsed_time)}s] 当前未检测到真实的 MuMu 实体窗口...")
@@ -160,33 +200,71 @@ def hidemumu() -> list:
     主控制入口：带有 30s 超时 kill 重试机制（最多运行 MAX_ATTEMPTS 次）
     返回值：[bool (是否成功), str (详细描述信息/报错 Traceback)]
     """
+    # 确保拥有管理员权限
+    run_as_admin()
+
     try:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             print(f"\n==================== 开始第 {attempt}/{MAX_ATTEMPTS} 次尝试隐藏 MuMu ====================")
             
             success = hidemumu_attempt()
             if success:
-                msg = f"第 {attempt} 次尝试即成功隐藏 MuMu。"
+                msg = f"第 {attempt} 次尝试即成功隐藏 MuMu 窗口。"
                 print(msg)
+                
+                # 【推送成功通知】
+                try:
+                    PerseusNotifyMsg("MuMu Hide Success", msg)
+                except Exception:
+                    pass
+                    
                 return [True, msg]
             
             # 如果超时且还有剩余重试次数，执行 kill 并准备下一次重试
             if attempt < MAX_ATTEMPTS:
-                print(f"第 {attempt} 次隐藏超时，准备清理进程并进行下一次重试...")
+                warn_msg = f"第 {attempt} 次隐藏超时（>{HIDE_TIMEOUT}s），准备清理进程并进行下一次重试..."
+                print(warn_msg)
+                
+                # 【推送警告通知】
+                try:
+                    PerseusWarningMsg("MuMu Hide Timeout Warning", warn_msg)
+                except Exception:
+                    pass
+                    
                 mumu_kill()
                 time.sleep(1)
             else:
-                msg = f"已达到最大重试次数 ({MAX_ATTEMPTS} 次)，依然未能成功隐藏窗口。"
+                msg = f"已达到最大重试次数 ({MAX_ATTEMPTS} 次)，依然未能成功隐藏 MuMu 窗口。"
                 print(msg)
+                
+                # 【推送失败报错】
+                try:
+                    PerseusErrorMsg("MuMu Hide Failed", msg)
+                except Exception:
+                    pass
+                    
                 return [False, msg]
 
-        return [False, "未知错误：未执行任何尝试。"]
+        msg = "未知错误：未执行任何尝试。"
+        try:
+            PerseusErrorMsg("MuMu Hide Unknown Error", msg)
+        except Exception:
+            pass
+        return [False, msg]
 
     except Exception as e:
         err_detail = traceback.format_exc()
+        full_err_msg = f"程序抛出异常: {e}\n详细堆栈信息:\n{err_detail}"
         print("❌ [错误] hidemumu 执行过程中发生异常:")
         print(err_detail)
-        return [False, f"程序抛出异常: {e}\n详细堆栈信息:\n{err_detail}"]
+        
+        # 【推送致命异常报错】
+        try:
+            PerseusErrorMsg("MuMu Hide Exception", full_err_msg)
+        except Exception:
+            pass
+            
+        return [False, full_err_msg]
 
 if __name__ == "__main__":
     result = hidemumu()
