@@ -87,7 +87,7 @@ def start_process(path, hide=False):
         err_msg = f"启动进程失败 {path}: {e}"
         print(err_msg)
         try:
-            PerseusErrorMsg("MuMu Launch Error", err_msg)
+            PerseusErrorMsg("MuMu Launch Error", f"[0015] {err_msg}")
         except Exception:
             pass
 
@@ -198,7 +198,7 @@ def hidemumu_attempt():
 def hidemumu() -> list:
     """
     主控制入口：带有 30s 超时 kill 重试机制（最多运行 MAX_ATTEMPTS 次）
-    返回值：[bool (是否成功), str (详细描述信息/报错 Traceback)]
+    返回值：[bool (是否成功), str (信息代码), str (详细描述信息/报错 Traceback)]
     """
     # 确保拥有管理员权限
     run_as_admin()
@@ -211,14 +211,7 @@ def hidemumu() -> list:
             if success:
                 msg = f"第 {attempt} 次尝试即成功隐藏 MuMu 窗口。"
                 print(msg)
-                
-                # 【推送成功通知】
-                try:
-                    PerseusNotifyMsg("MuMu Hide Success", msg)
-                except Exception:
-                    pass
-                    
-                return [True, msg]
+                return [True, "0011", msg]
             
             # 如果超时且还有剩余重试次数，执行 kill 并准备下一次重试
             if attempt < MAX_ATTEMPTS:
@@ -239,18 +232,18 @@ def hidemumu() -> list:
                 
                 # 【推送失败报错】
                 try:
-                    PerseusErrorMsg("MuMu Hide Failed", msg)
+                    PerseusErrorMsg("MuMu Hide Failed", f"[0012] {msg}")
                 except Exception:
                     pass
                     
-                return [False, msg]
+                return [False, "0012", msg]
 
         msg = "未知错误：未执行任何尝试。"
         try:
-            PerseusErrorMsg("MuMu Hide Unknown Error", msg)
+            PerseusErrorMsg("MuMu Hide Unknown Error", f"[0013] {msg}")
         except Exception:
             pass
-        return [False, msg]
+        return [False, "0013", msg]
 
     except Exception as e:
         err_detail = traceback.format_exc()
@@ -260,16 +253,18 @@ def hidemumu() -> list:
         
         # 【推送致命异常报错】
         try:
-            PerseusErrorMsg("MuMu Hide Exception", full_err_msg)
+            PerseusErrorMsg("MuMu Hide Exception", f"[0014] {full_err_msg}")
         except Exception:
             pass
             
-        return [False, full_err_msg]
+        return [False, "0014", full_err_msg]
 
 if __name__ == "__main__":
     result = hidemumu()
     print("\n---------------- 执行结果 ----------------")
     print(f"是否成功: {result[0]}")
-    print(f"说明信息:\n{result[1]}")
+    print(f"信息代码: {result[1]}")
+    print(f"说明信息:\n{result[2]}")
     print("------------------------------------------")
     print("脚本执行完毕。")
+
