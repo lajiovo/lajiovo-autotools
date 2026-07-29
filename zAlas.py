@@ -101,7 +101,7 @@ def force_hide_window(hwnd):
 def cleanup():
     """
     全清逻辑：清理 alas 及 azurpilot 相关的 python 脚本、GUI 界面以及 22267、22268 端口占用
-    返回: [bool, str]
+    返回: [bool, str, str] -> [是否成功, 信息代码, 描述详情]
     """
     elevate_privileges()
     
@@ -163,16 +163,16 @@ def cleanup():
 
         detail = f"Alas 后台全清完毕，共清理 {killed_count} 个相关进程/端口占用。"
         print(f"✅ {detail}")
-        return [True, detail]
+        return [True, "0001", detail]
 
     except Exception as e:
         err_msg = f"全清过程出现异常: {e}"
         print(f"❌ {err_msg}")
         try:
-            PerseusErrorMsg("Alas Cleanup Error", err_msg)
+            PerseusErrorMsg("Alas Cleanup Error", f"[0002] {err_msg}")
         except Exception:
             pass
-        return [False, err_msg]
+        return [False, "0002", err_msg]
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ def hide(target_count=1):
     """
     智能隐藏 AzurPilot 窗口主逻辑
     :param target_count: 期望隐藏的目标窗口数量（1 或 2）
-    返回: [bool, str]
+    返回: [bool, str, str] -> [是否成功, 信息代码, 描述详情]
     """
     elevate_privileges()
 
@@ -206,7 +206,8 @@ def hide(target_count=1):
                 is_success = len(hidden_hwnds) >= target_count
                 detail = f"监测结束，设定目标为 {target_count} 个窗口，实际隐藏 {len(hidden_hwnds)} 个窗口"
                 print(f"{'⏰' if not is_success else '✅'} {detail}")
-                return [is_success, detail]
+                code = "0005" if is_success else "0004"
+                return [is_success, code, detail]
 
             # 2. 检测并处理出现的窗口
             try:
@@ -219,7 +220,7 @@ def hide(target_count=1):
             except Exception as e:
                 err_msg = f"窗口检测/隐藏阶段发生错误: {e}"
                 print(f"❌ {err_msg}")
-                return [False, err_msg]
+                return [False, "0003", err_msg]
 
             # 3. 条件一：隐藏数量达到 target_count -> 剩余时间上限调整为 <= 10s（仅执行一次）
             if len(hidden_hwnds) >= target_count and not reduced_by_count:
@@ -245,7 +246,7 @@ def hide(target_count=1):
     except Exception as e:
         detail = f"隐藏过程中出现未捕获的异常: {e}"
         print(f"❌ {detail}")
-        return [False, detail]
+        return [False, "0006", detail]
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +255,7 @@ def hide(target_count=1):
 def start(alas_path=ALAS_PATH, show_window=True):
     """
     主控启动逻辑：先检测是否已运行，已运行传入 hide(1)，未运行拉起后传入 hide(2)
-    返回: [bool, str]
+    返回: [bool, str, str] -> [是否成功, 信息代码, 描述详情]
     """
     elevate_privileges()
 
@@ -279,10 +280,10 @@ def start(alas_path=ALAS_PATH, show_window=True):
             err_msg = f"未找到 Alas 可执行文件，路径不存在: {alas_path}"
             print(f"❌ {err_msg}")
             try:
-                PerseusErrorMsg("Alas Launch Failed", err_msg)
+                PerseusErrorMsg("Alas Launch Failed", f"[0007] {err_msg}")
             except Exception:
                 pass
-            return [False, err_msg]
+            return [False, "0007", err_msg]
 
         alas_dir = os.path.dirname(os.path.abspath(alas_path))
         CREATE_NEW_CONSOLE = 0x00000010
@@ -302,29 +303,31 @@ def start(alas_path=ALAS_PATH, show_window=True):
             err_msg = f"启动 Alas 过程出现异常: {e}"
             print(f"❌ {err_msg}")
             try:
-                PerseusErrorMsg("Alas Launch Exception", err_msg)
+                PerseusErrorMsg("Alas Launch Exception", f"[0008] {err_msg}")
             except Exception:
                 pass
-            return [False, err_msg]
+            return [False, "0008", err_msg]
 
     # 根据运行状态，分别向 hide() 传入 1 或 2 作为目标检测窗口数
     hide_result = hide(target_count=target_hide_count)
 
     # 根据 hide() 最终返回的布尔结果推送通知
-    if hide_result[0]:
+    if not hide_result[0]:
         try:
-            PerseusNotifyMsg("Success with smart_hide_azurpilot()", hide_result[1])
-        except Exception:
-            pass
-    else:
-        try:
-            PerseusErrorMsg("Bug with smart_hide_azurpilot()", hide_result[1])
+            PerseusErrorMsg("Bug with smart_hide_azurpilot()", f"[{hide_result[1]}] {hide_result[2]}")
         except Exception:
             pass
 
+    # 将 hide_result 原样或打包透传返回 (包含原 code 或定制分类码)
     return hide_result
 
 
 if __name__ == "__main__":
-    result = start()
+    a = input(">>")
+    if a == "1" :
+        result = start()
+    elif a == "2" :
+        result = hide()
+    elif a == "3" :
+        result = cleanup()
     print(f"\n执行结果: {result}")
