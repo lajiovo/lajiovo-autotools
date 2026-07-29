@@ -5,13 +5,11 @@ import time
 import urllib.request
 from playwright.sync_api import expect, sync_playwright
 
-# 导入 zAlas 模块
-import zAlas
 from zBarkCustom import PerseusErrorMsg, PerseusWarningMsg
 import zPerseusLogger
 
 
-def is_site_accessible(url="127.0.0.1:22267"):
+def is_site_accessible(url="http://127.0.0.1:22267"):
     """
     轻量级检查目标网页是否可访问
     """
@@ -22,29 +20,28 @@ def is_site_accessible(url="127.0.0.1:22267"):
         return False
 
 
-def wait_for_site_ready(url, max_wait_sec=300):
+def wait_for_site_ready(url, max_wait_sec=180):
     """
-    循环检查网页状态。如果未启动则调用 zAlas.start()，并在最长 5 分钟内等待恢复。
+    循环检查网页状态，在最长 3 分钟内等待网页在线。
     """
     if is_site_accessible(url):
-        print("🌐 检测到 127.0.0.1:22267 已在线，无需额外启动。")
+        print("🌐 检测到 127.0.0.1:22267 已在线。")
         return True
 
-    print("❌ 未检测到网页服务，正在调用 zAlas.start() 启动后台程序...")
-    zAlas.start()
+    print("⌛ 未检测到网页服务在线，等待恢复中...")
 
     start_time = time.time()
     while time.time() - start_time < max_wait_sec:
         elapsed = int(time.time() - start_time)
-        print(f"⏳ 正在等待网页响应...（已等待 {elapsed} 秒 / 最多 300 秒）")
+        print(f"⏳ 正在等待网页响应...（已等待 {elapsed} 秒 / 最多 {max_wait_sec} 秒）")
 
         if is_site_accessible(url):
             print("🎉 检测到网页已恢复在线状态！")
             return True
 
-        time.sleep(5)
+        time.sleep(3)
 
-    print("🚨 错误：已超过 5 分钟网页依然无响应，任务终止。")
+    print("🚨 错误：已超过 3 分钟网页依然无响应，任务终止。")
     return False
 
 
@@ -163,6 +160,7 @@ def handle_update_notice(page, target_url):
     2. 点击菜单【更新器/Updater】
     3. 检查更新状态
     4. 返回【alas】实例页面
+    返回格式: (success: bool, code: str, msg: str)
     """
     try:
         print("正在前往【主页】与【更新器】页面...")
@@ -202,7 +200,7 @@ def handle_update_notice(page, target_url):
         if re.search(r"等待所有\s*AzurPilot\s*完成当前任务", state_text, re.I):
             print("⌛ 检测到正在等待 AzurPilot 任务完成，无须再次点击更新。")
             back_to_alas()
-            return True, "Update 检查完成：等待所有 AzurPilot 完成当前任务"
+            return True, "0018", "Update 检查完成：等待所有 AzurPilot 完成当前任务"
 
         # 情况 B: 已是最新版本
         if re.search(
@@ -210,7 +208,7 @@ def handle_update_notice(page, target_url):
         ):
             print("✨ 已经是最新版本，无须更新。")
             back_to_alas()
-            return True, "Update 检查完成：已是最新版本"
+            return True, "0019", "Update 检查完成：已是最新版本"
 
         # 情况 C: 有新版本可用 -> 点击进行更新
         if re.search(
@@ -225,11 +223,9 @@ def handle_update_notice(page, target_url):
                 start_update_btn.wait_for(state="visible", timeout=5000)
                 print("🚀 发现可更新版本，点击【进行更新】...")
 
-                # 使用 force=True 避开 Toastify 浮条等遮挡物的 intercept 限制
                 try:
                     start_update_btn.click(force=True)
                 except Exception:
-                    # 兜底方案：使用 JS 强制触发元素原生 click 事件
                     start_update_btn.evaluate("el => el.click()")
 
                 updating_svg = page.locator("svg.aside-icon.icon-run-update-fly")
@@ -261,29 +257,26 @@ def handle_update_notice(page, target_url):
 
                 back_to_alas()
                 print("🔙 已点击返回 alas 实例界面。")
-                return True, "Update 成功：已完成更新并返回 alas 界面"
+                return True, "0020", "Update 成功：已完成更新并返回 alas 界面"
 
             except Exception as btn_err:
                 print(f"点击【进行更新】按钮出错: {btn_err}")
                 back_to_alas()
-                return True, "Update 检查完成：未能够成功点击更新按钮"
+                return True, "0021", "Update 检查完成：未能够成功点击更新按钮"
 
         back_to_alas()
-        return True, f"Update 检查完成：当前更新状态为 [{state_text}]"
+        return True, "0022", f"Update 检查完成：当前更新状态为 [{state_text}]"
 
     except Exception as e:
         msg = f"Update 流程执行异常: {e}"
         print(f"⚠️ {msg}")
-        return False, msg
+        return False, "0023", msg
 
 
 def handle_restart_alas(page):
     """
     重启 Alas 流程：
-    1. 点击侧边栏【主页/Home】
-    2. 点击菜单栏【开发者工具】
-    3. 点击【重启Alas】按钮
-    4. 返回总览
+    返回格式: (success: bool, code: str, msg: str)
     """
     try:
         print("正在前往【主页】与【开发者工具】页面...")
@@ -321,31 +314,32 @@ def handle_restart_alas(page):
         instance_btn.wait_for(state="visible", timeout=5000)
         instance_btn.click(force=True)
         print("🔙 已点击返回 alas 总览界面。")
-        return True, "Restart 成功：已触发重启 Alas 并返回总览"
+        return True, "0024", "Restart 成功：已触发重启 Alas 并返回总览"
     except Exception as e:
         msg = f"Restart 流程执行异常: {e}"
         print(f"⚠️ {msg}")
-        return False, msg
+        return False, "0025", msg
 
 
 def check_error_status(page):
     """
-    仅仅检查错误状态
-    返回: (has_error: bool, msg: str) -> True 代表检测到了错误图标，False 代表无错误图标
+    检查错误状态
+    返回: (has_error: bool, code: str, msg: str)
     """
     error_svg = page.locator("svg.aside-icon.icon-run-error")
     try:
         error_svg.wait_for(state="visible", timeout=3000)
         print("🚨 检测到 Alas 处于运行错误状态 (icon-run-error)！")
-        return True, "Check：检测到错误图标"
+        return True, "0026", "Check：检测到错误图标"
     except Exception:
         print("✨ 未检测到运行错误图标，状态正常。")
-        return False, "Check：未发现错误图标"
+        return False, "0027", "Check：未发现错误图标"
 
 
 def start_scheduler(page):
     """
     启动调度器逻辑
+    返回: (success: bool, code: str, msg: str)
     """
     target_locator = page.locator("#pywebio-scope-scheduler_btn button")
     try:
@@ -355,7 +349,7 @@ def start_scheduler(page):
 
         if btn_text.lower() in ["停止", "stop"]:
             print(f"当前状态为【{btn_text}】，无需点击。")
-            return True, "Start 成功：调度器当前已处于运行中(停止状态)"
+            return True, "0028", "Start 成功：调度器当前已处于运行中(停止状态)"
         elif btn_text.lower() in ["启动", "start"]:
             print("检测到状态为【启动/Start】，正在点击按钮...")
             target_locator.click(force=True)
@@ -366,21 +360,21 @@ def start_scheduler(page):
             try:
                 stop_btn_locator.wait_for(state="visible", timeout=8000)
                 print("👉 确认切换：检测到了【停止/stop】按钮！")
-                return True, "Start 成功：已成功点击启动并切换状态"
+                return True, "0029", "Start 成功：已成功点击启动并切换状态"
             except Exception:
                 msg = f"Start 失败：等待超时，状态未成功切换为停止。当前按钮文本: '{target_locator.text_content().strip()}'"
                 print(f"⚠️ {msg}")
-                PerseusWarningMsg("Scheduler Start Failed", "")
-                return False, msg
+                PerseusWarningMsg("Scheduler Start Failed", "[0030]")
+                return False, "0030", msg
         else:
             msg = f"Start 失败：未知按键状态 '{btn_text}'"
             print(msg)
-            PerseusWarningMsg("Unknown Scheduler Button", f"内容为{btn_text}")
-            return False, msg
+            PerseusWarningMsg("Unknown Scheduler Button", f"[0031] 内容为{btn_text}")
+            return False, "0031", msg
     except Exception as e:
         msg = f"Start 失败：操作启动按钮异常: {e}"
         print(msg)
-        return False, msg
+        return False, "0032", msg
 
 
 def main(
@@ -389,151 +383,106 @@ def main(
 ):
     """
     主控流程函数
-    返回格式: [is_all_success: bool, task_results: list[list[bool, str]]]
+    返回格式: [is_all_success: bool, task_results: list[list[bool, str, str]]]
+    内部每一个子任务结果格式: [is_success: bool, code: str, msg: str]
     """
     if task_list is None:
         task_list = ["update", "check", "start"]
 
     target_url = "http://127.0.0.1:22267"
-    errorcount = 0
 
     if not wait_for_site_ready(target_url, max_wait_sec=300):
-        return [False, [[False, "错误：已超过 5 分钟网页依然无响应，任务终止。"]]]
+        return [False, [[False, "0016", "错误：已超过 5 分钟网页依然无响应，任务终止。"]]]
 
-    while True:
-        task_results = []
-        has_error = False
+    task_results = []
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
 
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            auth_json_path = os.path.join(current_dir, "auth.json")
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        auth_json_path = os.path.join(current_dir, "auth.json")
 
-            storage_data = fix_and_load_storage(auth_json_path)
-            if storage_data:
-                print("正在加载登录凭证...")
-                context = browser.new_context(storage_state=storage_data)
-            else:
-                print("❌ 未在同目录下找到有效 auth.json，将以默认状态打开...")
-                context = browser.new_context()
+        storage_data = fix_and_load_storage(auth_json_path)
+        if storage_data:
+            print("正在加载登录凭证...")
+            context = browser.new_context(storage_state=storage_data)
+        else:
+            print("❌ 未在同目录下找到有效 auth.json，将以默认状态打开...")
+            context = browser.new_context()
 
-            page = context.new_page()
+        page = context.new_page()
 
-            try:
-                page.goto(target_url, timeout=30000)
-            except Exception as load_err:
-                print(f"🚨 打开网页超时或异常: {load_err}")
-                browser.close()
-                return [False, [[False, f"页面无法正常打开: {load_err}"]]]
+        try:
+            page.goto(target_url, timeout=30000)
+        except Exception as load_err:
+            print(f"🚨 打开网页超时或异常: {load_err}")
+            browser.close()
+            return [False, [[False, "0017", f"页面无法正常打开: {load_err}"]]]
 
-            # 默认统一处理初始弹窗
-            handle_initial_notices(page)
+        # 默认统一处理初始弹窗
+        handle_initial_notices(page)
 
-            # 遍历任务列表按需执行
-            for task in task_list:
-                ensure_alas_overview(page)
+        # 顺序执行任务列表
+        for task in task_list:
+            ensure_alas_overview(page)
 
-                if task == "update":
-                    print("--- 执行任务: update (检查与升级版本) ---")
-                    success, msg = handle_update_notice(page, target_url)
-                    task_results.append([success, msg])
-                    if not success:
-                        has_error = True
+            if task == "update":
+                print("--- 执行任务: update (检查与升级版本) ---")
+                success, code, msg = handle_update_notice(page, target_url)
+                task_results.append([success, code, msg])
 
-                elif task == "check":
-                    print("--- 执行任务: check (错误图标检查) ---")
-                    detected_error, msg = check_error_status(page)
-                    task_results.append([True, msg])
-                    if detected_error:
-                        has_error = True
+            elif task == "check":
+                print("--- 执行任务: check (错误图标检查) ---")
+                detected_error, code, msg = check_error_status(page)
+                # check 任务检测到错误图标代表其监测出异常
+                task_results.append([not detected_error, code, msg])
 
-                elif task == "start":
-                    print("--- 执行任务: start (启动调度器) ---")
-                    success, msg = start_scheduler(page)
-                    task_results.append([success, msg])
-                    if not success:
-                        has_error = True
+            elif task == "start":
+                print("--- 执行任务: start (启动调度器) ---")
+                success, code, msg = start_scheduler(page)
+                task_results.append([success, code, msg])
 
-                elif task == "wait":
-                    print("--- 执行任务: wait (等待 10 秒并刷新界面) ---")
-                    try:
-                        time.sleep(10)
-                        page.reload(timeout=30000)
-                        handle_initial_notices(page)
-                        print("🎉 刷新成功并已清理弹窗。")
-                        task_results.append(
-                            [True, "Wait 成功：等待 10s 刷新完毕"]
-                        )
-                    except Exception as wait_err:
-                        msg = f"Wait 任务刷新异常: {wait_err}"
-                        print(f"⚠️ {msg}")
-                        task_results.append([False, msg])
-                        has_error = True
-
-                elif task == "restart":
-                    print("--- 执行任务: restart (在开发者工具中重启 Alas) ---")
-                    success, msg = handle_restart_alas(page)
-                    task_results.append([success, msg])
-                    if not success:
-                        has_error = True
-
-            # 错误重试/重启逻辑
-            if has_error:
-                print("大概是有什么错误，让我们等一下吧, 10s")
-                errorcount += 1
-                page.wait_for_timeout(10000)
-
-                ensure_alas_overview(page)
-                detected_error, _ = check_error_status(page)
-                start_ok, _ = start_scheduler(page)
-
-                if detected_error or not start_ok:
-                    print("看起来还是不行欸，让我们重启 alas 试试吧")
-                    errorcount += 1
-                    zAlas.cleanup()
-                    zAlas.start()
-                    browser.close()
-
-                    if errorcount <= 2:
-                        print("将再次进入 main 循环")
-                        continue
-                    else:
-                        print("我们放弃吧")
-                        non_check_success = all(
-                            item[0]
-                            for idx, item in enumerate(task_results)
-                            if task_list[idx] != "check"
-                        )
-                        return [non_check_success, task_results]
-                else:
-                    browser.close()
-                    non_check_success = all(
-                        item[0]
-                        for idx, item in enumerate(task_results)
-                        if task_list[idx] != "check"
+            elif task == "wait":
+                print("--- 执行任务: wait (等待 10 秒并刷新界面) ---")
+                try:
+                    time.sleep(10)
+                    page.reload(timeout=30000)
+                    handle_initial_notices(page)
+                    print("🎉 刷新成功并已清理弹窗。")
+                    task_results.append(
+                        [True, "0033", "Wait 成功：等待 10s 刷新完毕"]
                     )
-                    return [non_check_success, task_results]
-            else:
-                print("Great! 所有指定任务成功完成。")
-                if not headless:
-                    page.wait_for_timeout(2000)
-                else:
-                    page.wait_for_timeout(200)
-                browser.close()
+                except Exception as wait_err:
+                    msg = f"Wait 任务刷新异常: {wait_err}"
+                    print(f"⚠️ {msg}")
+                    task_results.append([False, "0034", msg])
 
-                non_check_success = all(
-                    item[0]
-                    for idx, item in enumerate(task_results)
-                    if task_list[idx] != "check"
-                )
-                return [non_check_success, task_results]
+            elif task == "restart":
+                print("--- 执行任务: restart (在开发者工具中重启 Alas) ---")
+                success, code, msg = handle_restart_alas(page)
+                task_results.append([success, code, msg])
+
+        if not headless:
+            page.wait_for_timeout(2000)
+        else:
+            page.wait_for_timeout(200)
+
+        browser.close()
+
+    # 统计除了 check 之外的任务是否都成功（check 只作为信息收集，不阻断总体成功判定）
+    non_check_success = all(
+        item[0]
+        for idx, item in enumerate(task_results)
+        if task_list[idx] != "check"
+    )
+
+    return [non_check_success, task_results]
 
 
 if __name__ == "__main__":
     result = main(
         headless=False,
-        task_list=["update", "check", "start", "wait"],
+        task_list=["check", "start", "wait","check","update"],
     )
     print("\n最终运行结果:")
     print(f"整体是否成功: {result[0]}")
