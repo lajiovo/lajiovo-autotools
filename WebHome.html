@@ -1,1 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>碧蓝航线 - 英仙座 (HMS Perseus)</title>
+    <style>
+        :root {
+            --primary: #00d2ff;
+            --secondary: #3a7bd5;
+            --accent: #e0c3fc;
+            --bg-dark: #0a0d14;
+            --card-bg: rgba(16, 22, 34, 0.75);
+            --text-main: #f0f4f8;
+            --text-sub: #8a99ad;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            overflow-x: hidden;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        /* 动态背景 Canvas */
+        #bg-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* 主容器 */
+        .container {
+            position: relative;
+            z-index: 1;
+            width: 90%;
+            max-width: 1100px;
+            margin: 40px auto;
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(0, 210, 255, 0.2);
+            border-radius: 24px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6),
+                        0 0 30px rgba(0, 210, 255, 0.1);
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            overflow: hidden;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .container:hover {
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8),
+                        0 0 40px rgba(0, 210, 255, 0.25);
+        }
+
+        /* 左侧立绘/视觉区 */
+        .visual-section {
+            position: relative;
+            background: linear-gradient(135deg, rgba(0,210,255,0.1), rgba(58,123,213,0.05));
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 40px 20px;
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+            overflow: hidden;
+        }
+
+        .avatar-wrapper {
+            position: relative;
+            width: 260px;
+            height: 260px;
+            border-radius: 50%;
+            padding: 8px;
+            background: linear-gradient(45deg, var(--primary), transparent, var(--accent));
+            animation: spinBg 10s linear infinite;
+        }
+
+        @keyframes spinBg {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .avatar {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            object-fit: cover;
+            background-color: #1a2232;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* 标签与徽章 */
+        .badge {
+            margin-top: 25px;
+            padding: 6px 16px;
+            background: rgba(0, 210, 255, 0.15);
+            border: 1px solid var(--primary);
+            border-radius: 20px;
+            color: var(--primary);
+            font-size: 0.85rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            box-shadow: 0 0 10px rgba(0,210,255,0.3);
+        }
+
+        .character-title {
+            margin-top: 15px;
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: 3px;
+            background: linear-gradient(to right, #fff, var(--primary));
+            -webkit-background-clip: text;
+            background-clip: text; /* 标准属性定义 */
+            -webkit-text-fill-color: transparent;
+        }
+
+        .character-subtitle {
+            font-size: 0.9rem;
+            color: var(--text-sub);
+            margin-top: 5px;
+        }
+
+        /* 右侧信息区 */
+        .info-section {
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .quote-box {
+            position: relative;
+            padding: 15px 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border-left: 3px solid var(--primary);
+            border-radius: 0 8px 8px 0;
+            margin-bottom: 25px;
+            font-style: italic;
+            color: #d1d9e6;
+            line-height: 1.6;
+        }
+
+        .section-title {
+            font-size: 1.1rem;
+            color: var(--primary);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            letter-spacing: 1px;
+        }
+
+        .section-title::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 16px;
+            background: var(--primary);
+            border-radius: 2px;
+        }
+
+        /* 属性表格 Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+
+        .stat-item {
+            background: rgba(255, 255, 255, 0.02);
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-sub);
+        }
+
+        .stat-value {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-top: 2px;
+        }
+
+        /* 技能区 */
+        .skills-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .skill-card {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 12px 16px;
+            border-radius: 10px;
+            transition: all 0.2s ease;
+        }
+
+        .skill-card:hover {
+            border-color: rgba(0, 210, 255, 0.4);
+            transform: translateX(4px);
+        }
+
+        .skill-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .skill-name {
+            font-weight: 600;
+            color: #fff;
+            font-size: 0.9rem;
+        }
+
+        .skill-tag {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(0, 210, 255, 0.2);
+            color: var(--primary);
+        }
+
+        .skill-desc {
+            font-size: 0.8rem;
+            color: var(--text-sub);
+            line-height: 1.4;
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 850px) {
+            .container {
+                grid-template-columns: 1fr;
+                margin: 20px;
+            }
+            .visual-section {
+                border-right: none;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 动态背景 Canvas -->
+    <canvas id="bg-canvas"></canvas>
+
+    <!-- 卡片主体 -->
+    <div class="container">
+        <!-- 左侧：视觉与身份 -->
+        <div class="visual-section">
+            <div class="avatar-wrapper">
+                <svg class="avatar" viewBox="0 0 100 100">
+                    <defs>
+                        <linearGradient id="avatarGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#1e293b" />
+                            <stop offset="100%" stop-color="#0f172a" />
+                        </linearGradient>
+                    </defs>
+                    <rect width="100" height="100" fill="url(#avatarGrad)" />
+                    <circle cx="50" cy="45" r="25" fill="none" stroke="#00d2ff" stroke-width="1" opacity="0.4"/>
+                    <path d="M46 33 H54 V41 H62 V49 H54 V57 H46 V49 H38 V41 H46 Z" fill="#00d2ff" opacity="0.8"/>
+                    <text x="50" y="80" font-size="7" fill="#8a99ad" text-anchor="middle" letter-spacing="1">PERSEUS</text>
+                </svg>
+            </div>
+            <div class="badge">SSR 巨型航空母舰</div>
+            <h1 class="character-title">英仙座</h1>
+            <div class="character-subtitle">HMS Perseus (R40) · 皇家阵营</div>
+        </div>
+
+        <!-- 右侧：台词与详细档案 -->
+        <div class="info-section">
+            <div>
+                <!-- 台词 -->
+                <div class="quote-box">
+                    “皇家海军，巨型航空母舰英仙座……反正我也不是那么想来指挥部，不用顾虑我，请自便吧。……真是的，为什么我要非得干这种活不可啊……”
+                </div>
+
+                <!-- 基本档案 -->
+                <div class="section-title">基本档案</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">类型 / 稀有度</div>
+                        <div class="stat-value">轻航 (CVL) / SSR</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">性格特征</div>
+                        <div class="stat-value">别扭 / 傲娇 / 极富责任感</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">核心定位</div>
+                        <div class="stat-value">开局预加载 / 全队治疗</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">画师 / CV</div>
+                        <div class="stat-value">Kincora / 大西沙织</div>
+                    </div>
+                </div>
+
+                <!-- 核心技能 -->
+                <div class="section-title">核心技能</div>
+                <div class="skills-container">
+                    <div class="skill-card">
+                        <div class="skill-header">
+                            <span class="skill-name">斑斓的试炼</span>
+                            <span class="skill-tag">开局预载</span>
+                        </div>
+                        <div class="skill-desc">
+                            战斗开始时，直接获得 2 次舰载机预先装填；但战斗中舰载机装填时间增加 90%。
+                        </div>
+                    </div>
+
+                    <div class="skill-card">
+                        <div class="skill-header">
+                            <span class="skill-name">誓约的绿荫</span>
+                            <span class="skill-tag">全队恢复</span>
+                        </div>
+                        <div class="skill-desc">
+                            空袭发动时，为前排角色恢复血量；并在随后的 12 秒内，每 3 秒恢复后排角色血量。
+                        </div>
+                    </div>
+
+                    <div class="skill-card">
+                        <div class="skill-header">
+                            <span class="skill-name">加速支援提琴</span>
+                            <span class="skill-tag">跨队支援</span>
+                        </div>
+                        <div class="skill-desc">
+                            在主舰队以外的队伍战斗开始第 20 秒时，进行一次特殊航空弹幕，并恢复该队伍角色血量。
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 背景粒子动画 Script -->
+    <script>
+        const canvas = document.getElementById('bg-canvas');
+        const ctx = canvas.getContext('2d');
+
+        let width, height;
+        let particles = [];
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Particle {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.size = Math.random() * 2 + 0.5;
+                this.speedX = (Math.random() - 0.5) * 0.3;
+                this.speedY = -Math.random() * 0.5 - 0.2;
+                this.alpha = Math.random() * 0.5 + 0.2;
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+
+                if (this.y < 0 || this.x < 0 || this.x > width) {
+                    this.reset();
+                    this.y = height;
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = `rgba(0, 210, 255, ${this.alpha})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        for (let i = 0; i < 70; i++) {
+            particles.push(new Particle());
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+
+            let gradient = ctx.createRadialGradient(width/2, height/2, 100, width/2, height/2, width/1.2);
+            gradient.addColorStop(0, '#0f172a');
+            gradient.addColorStop(1, '#05070a');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, width, height);
+
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
 
