@@ -1,43 +1,77 @@
-from zBark import bark ,barkall
+import json
+import urllib.parse
+import urllib.request
+from zBark import bark, barkall
 
-DEVICEKEYLIST = ["xxxxx"]
+DEVICEKEYLIST = [""]
 ALARMSOUND = "alarm"
 NORMALSOUND = "alarm"
 ICON1 = "https://patchwiki.biligame.com/images/blhx/0/05/3bi61qmjssvlemdug8rag683vcj2ziy.png"
 ICON2 = "https://patchwiki.biligame.com/images/blhx/0/0f/m5rycu93qc94r5lyst8862wnbvehjle.png"
 ICON3 = "https://patchwiki.biligame.com/images/blhx/9/9a/onh0ri4tx1wjuhhtxegjqqcobv7wdjc.png"
 
-def PerseusWarningMsg(main:str,msg:str):
+
+#向你的QBot转发消息，可以关闭
+def forward_push(title: str, msg: str):
+    """额外转发消息至本地推送接口 (使用 GET 请求匹配 25567 端口)"""
+    # 标题和内容拼接在一起
+    full_msg = f"{title}\n{msg}"
+    
+    # 将 msg 和 group 拼接为 URL 查询参数并进行安全转码
+    params = urllib.parse.urlencode({
+        "msg": full_msg,
+        "group": "3"
+    })
+    
+    url = f"http://127.0.0.1:25567/push?{params}"
+    
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    try:
+        # 发送标准 GET 请求
+        with urllib.request.urlopen(req, timeout=0.2) as response:
+            return response.read().decode('utf-8')
+    except Exception as e:
+        print(f"转发消息失败: {e}")
+        return None
+
+def PerseusWarningMsg(main: str, msg: str):
+    title = f"WARNING:{main}"
+    forward_push(title, msg)
     return barkall(DEVICEKEYLIST,
-        title=f"WARNING:{main}",
+        title=title,
         body=msg,
         group="Perseus",
         sound=ALARMSOUND,
         level="timesensitive",
-        icon = ICON1
+        icon=ICON1
         )
 
-def PerseusErrorMsg(main:str,msg:str):
+def PerseusErrorMsg(main: str, msg: str):
+    title = f"ERROR:{main}"
+    forward_push(title, msg)
     return barkall(DEVICEKEYLIST,
-        title=f"ERROR:{main}",
+        title=title,
         body=msg,
         group="Perseus",
         sound=ALARMSOUND,
         level="timesensitive",
-        icon =  ICON3
+        icon=ICON3
         )
 
-def PerseusNotifyMsg(main:str,msg:str):
+def PerseusNotifyMsg(main: str, msg: str):
+    title = f"Notice:{main}"
+    forward_push(title, msg)
     return barkall(DEVICEKEYLIST,
-        title=f"Notice:{main}",
+        title=title,
         body=msg,
         group="Perseus",
         sound=NORMALSOUND,
         level="passive",
-        icon= ICON2
+        icon=ICON2
         )
 
-def CustomMsg(title:str,msg:str,group:str):
+def CustomMsg(title: str, msg: str, group: str):
+    forward_push(title, msg)
     return barkall(DEVICEKEYLIST,
         title=title,
         body=msg,
@@ -45,8 +79,8 @@ def CustomMsg(title:str,msg:str,group:str):
         sound=ALARMSOUND,
         level="passive",
         copy=msg,
-        icon = ICON2
+        icon=ICON2
         )
 
 if __name__ == "__main__":
-    PerseusNotifyMsg("Tesing","test3")
+    PerseusNotifyMsg("Testing", "test3")
