@@ -9,13 +9,19 @@ import threading
 import multiprocessing
 from flask import Flask, request, send_from_directory
 from zBarkCustom import PerseusNotifyMsg, PerseusErrorMsg
-from zMainHandler import run_alas_mumu_check, handlerun
+from zMainHandler import run_alas_mumu_check, handlerun, Handlepush
 import zAlas
 import zMumu
 import zPGRJZ
 
 app = Flask(__name__)
 LISTEN_PORT = 25566
+
+# QBot 相关配置
+PYTHONW_PATH = r"\Programs\Python\Python314\pythonw.exe"
+QBOT_SCRIPT_PATH = r"\QBot\main.py"
+# 专用的精准识别标记（写在命令行参数中）
+QBOT_IDENTIFIER = "--PERSEUS_QBOT_INSTANCE"
 
 # 全局状态控制与定时器线程锁/事件控制
 HANDLEPUSH = True
@@ -29,7 +35,6 @@ def is_admin():
             return ctypes.windll.shell32.IsUserAnAdmin() != 0
         except Exception:
             return False
-    # 非 Windows 系统默认视为拥有所需权限
     return True
 
 def request_admin_privileges(max_retries=5):
@@ -37,7 +42,6 @@ def request_admin_privileges(max_retries=5):
     if is_admin():
         return True
 
-    # 尝试读取环境变量中的重试次数
     try:
         retry_count = int(os.environ.get("ADMIN_RETRY_COUNT", "0"))
     except ValueError:
@@ -51,17 +55,13 @@ def request_admin_privileges(max_retries=5):
     print(f"⚠️ 当前未获取管理员权限，正在请求提权 (第 {retry_count}/{max_retries} 次尝试)...")
 
     if sys.platform.startswith("win"):
-        # 将递增后的计数写回环境变量传递给提升权限后的新进程
         env = os.environ.copy()
         env["ADMIN_RETRY_COUNT"] = str(retry_count)
 
-        # 构建命令行参数
         script = os.path.abspath(sys.argv[0])
         params = " ".join([f'"{arg}"' for arg in sys.argv[1:]])
         
         try:
-            # 同样在环境变量中把 ADMIN_RETRY_COUNT 传下去，避免多开无序
-            # 借由 Windows 注册表或命令传递参数 ShellExecuteW 'runas'
             ctypes.windll.shell32.ShellExecuteW(
                 None, 
                 "runas", 
@@ -70,7 +70,6 @@ def request_admin_privileges(max_retries=5):
                 None, 
                 1
             )
-            # 申请提升后，原非管理员进程直接退出
             sys.exit(0)
         except Exception as e:
             print(f"❌ 请求管理员权限失败: {e}")
@@ -83,7 +82,6 @@ def kill_port_process(port):
     """启动时结束指定端口的原有占用进程"""
     try:
         if sys.platform.startswith("win"):
-            # Windows 平台处理：在 findstr 后面加上 || rem 避免未找到匹配时返回错误码 1
             cmd = f"netstat -ano | findstr :{port}"
             try:
                 output = subprocess.check_output(cmd, shell=True).decode('gbk', errors='ignore')
@@ -100,7 +98,6 @@ def kill_port_process(port):
                     print(f"🧹 检测到端口 {port} 被进程 {pid} 占用，正在结束该进程...")
                     subprocess.call(f"taskkill /F /PID {pid}", shell=True)
         else:
-            # Linux / macOS 平台处理
             cmd = f"lsof -i:{port} -t"
             try:
                 pids = subprocess.check_output(cmd, shell=True).decode().strip().splitlines()
@@ -112,22 +109,100 @@ def kill_port_process(port):
     except Exception as e:
         print(f"⚠️ 尝试清理端口 {port} 占用进程时遇到问题: {e}")
 
+# ==================== QBot 进程精准查杀与无窗口启动 ====================
+
+# ==================== QBot 进程精准查杀与无窗口启动（零弹窗版） ====================
+
+def kill_qbot_process():
+    """查找并精准查杀带有识别标记的 QBot 进程（彻底无弹窗）"""
+    if not sys.platform.startswith("win"):
+        return
+
+    try:
+        # 1. 设置静默运行参数，彻底隐藏子进程控制台窗口
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+        ps_command = f'Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like "*{QBOT_IDENTIFIER}*" }} | Select-Object -ExpandProperty ProcessId'
+        
+        proc = subprocess.Popen(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            text=True
+        )
+        output, _ = proc.communicate()
+
+        if output and output.strip():
+            pids = output.strip().splitlines()
+            for pid in pids:
+                pid = pid.strip()
+                if pid.isdigit():
+                    print(f"🧹 找到指定的 QBot 进程 (PID: {pid})，正在静默结束...")
+                    # 杀进程同样传入静默参数，防止 taskkill 弹窗
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", pid],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        startupinfo=startupinfo,
+                        creationflags=creationflags
+                    )
+            time.sleep(0.5)
+        else:
+            print("🔍 未检测到正在运行的 QBot 目标进程。")
+    except Exception as e:
+        print(f"⚠️ 清理 QBot 进程时发生异常: {e}")
+
+def start_qbot_process():
+    """先精准清理，然后使用 pythonw 无窗口启动 QBot"""
+    # 1. 启动前先精准查杀旧进程
+    kill_qbot_process()
+
+    if not os.path.exists(PYTHONW_PATH):
+        raise FileNotFoundError(f"未找到 pythonw.exe 路径: {PYTHONW_PATH}")
+    if not os.path.exists(QBOT_SCRIPT_PATH):
+        raise FileNotFoundError(f"未找到脚本文件路径: {QBOT_SCRIPT_PATH}")
+
+    # 2. 构建启动命令，附带 QBOT_IDENTIFIER 参数作为精准定位标记
+    cmd = [PYTHONW_PATH, QBOT_SCRIPT_PATH, QBOT_IDENTIFIER]
+    working_dir = os.path.dirname(QBOT_SCRIPT_PATH)
+
+    # 3. 设置 Windows 彻底无窗口标志
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+
+    print(f"🚀 正在使用 pythonw 后台静默启动 QBot: {QBOT_SCRIPT_PATH}")
+    subprocess.Popen(
+        cmd,
+        cwd=working_dir,
+        startupinfo=startupinfo,
+        creationflags=creationflags,
+        close_fds=True
+    )
+
+
+# ==================== 定时器及基础状态管理 ====================
+
 def stop_timer():
     """停止后台定时检查线程"""
     global timer_event
-    timer_event.set()  # 触发事件以打断等待并退出循环
+    timer_event.set()
 
 def start_alas_mumu_check_timer():
     """启动/重启后台定时任务线程：每半小时自动执行一次 alas_mumu_check"""
     global timer_thread, timer_event
-    # 先停止旧的定时线程（如果存在）
     stop_timer()
     
     timer_event = threading.Event()
     
     def timer_loop():
         while not timer_event.is_set():
-            # 使用 timer_event.wait 代替 time.sleep，这样停止时能瞬间响应
             if timer_event.wait(1800):
                 break
             try:
@@ -144,11 +219,8 @@ def enter_standby():
     """进入待机状态：停止 handlepush，清理进程，停用定时任务"""
     global HANDLEPUSH
     HANDLEPUSH = False
-    
-    # 停止定时检查
     stop_timer()
     
-    # 清理 zAlas 和 zMumu 进程
     try:
         print("🧹 正在执行 zAlas.cleanup()...")
         zAlas.cleanup()
@@ -171,10 +243,9 @@ def format_response(result_data, status_code=200):
         body = str(result_data)
     return body, status_code, {"Content-Type": "application/json"}
 
-# 推送接收接口，同时支持 GET / POST
+# 推送接收接口
 @app.route("/push", methods=["GET", "POST"])
 def receive_push():
-    # 合并三种传参方式：GET参数、POST表单、POST JSON
     msg_dict = {}
     msg_dict.update(request.args.to_dict())
     msg_dict.update(request.form.to_dict())
@@ -183,7 +254,6 @@ def receive_push():
         if json_data:
             msg_dict.update(json_data)
 
-    # 终端格式化打印完整消息字典
     print("\n========================================")
     print(f"【新OnePush推送】时间：{str(request.args)}")
     print("消息完整字典：")
@@ -193,7 +263,6 @@ def receive_push():
     if HANDLEPUSH:
         push_res = Handlepush(msg_dict)
         if not push_res:
-            # push处理失败时进入待机状态
             print("❌ Handlepush 处理失败，进入待机状态...")
             enter_standby()
             
@@ -210,11 +279,8 @@ def receive_push():
             }
             return format_response(fail_resp, 500)
         
-        # 处理成功，直接返回 Handlepush 的输出结果
         return format_response(push_res, 200)
 
-    # 如果 HANDLEPUSH == False (待机模式下)
-    # 转发消息，但不进行处理
     title = msg_dict.get("title", "")
     body = msg_dict.get("body", "")
     PerseusNotifyMsg(title, body)
@@ -241,21 +307,18 @@ def handle_start():
     global HANDLEPUSH
     HANDLEPUSH = True
     
-    # 立即运行一次 check
     try:
         print("▶️ 收到 /start 请求，正在运行 run_alas_mumu_check...")
         run_alas_mumu_check()
     except Exception as e:
         print(f"⚠️ 运行 run_alas_mumu_check 出现异常: {e}")
         
-    # 重启定时检查进程
     start_alas_mumu_check_timer()
-    
     return format_response({"status": "ok", "message": "服务已重新启动并恢复处理"}, 200)
 
 @app.route("/shutdown", methods=["GET", "POST"])
 def handle_shutdown():
-    """接收 /shutdown 请求，结束定时检查和自身进程（不管 alas 和 mumu）"""
+    """接收 /shutdown 请求，结束定时检查和自身进程"""
     print("🛑 收到 /shutdown 请求，正在关闭服务自身...")
     stop_timer()
     
@@ -266,16 +329,48 @@ def handle_shutdown():
     threading.Thread(target=delayed_exit, daemon=True).start()
     return format_response({"status": "ok", "message": "定时检查已终止，接收服务正在退出..."}, 200)
 
-@app.route("/ping", methods=["GET", "POST"])
-def handle_ping():
-    """接收 /ping 请求，根据 HANDLEPUSH 返回状态"""
-    return format_response({"handlepush": HANDLEPUSH}, 200)
+# ==================== 新增：Bot 启动与关闭路由 ====================
+
+@app.route("/bot/start", methods=["GET", "POST"])
+def handle_bot_start():
+    """接收 /bot/start 请求：先杀死旧的 QBot 进程，再用 pythonw 后台无窗口拉起"""
+    try:
+        start_qbot_process()
+        return format_response({
+            "status": "ok", 
+            "message": "QBot 启动成功（已完成启动前旧进程清理，无窗口运行中）"
+        }, 200)
+    except Exception as e:
+        print(f"❌ QBot 启动失败: {e}")
+        return format_response({
+            "status": "error", 
+            "message": f"QBot 启动失败: {str(e)}"
+        }, 500)
+
+@app.route("/bot/shutdown", methods=["GET", "POST"])
+def handle_bot_shutdown():
+    """接收 /bot/shutdown 请求：精准结束 QBot 进程"""
+    try:
+        kill_qbot_process()
+        return format_response({
+            "status": "ok", 
+            "message": "QBot 进程已精准清理/关闭"
+        }, 200)
+    except Exception as e:
+        print(f"❌ QBot 查杀关闭失败: {e}")
+        return format_response({
+            "status": "error", 
+            "message": f"QBot 查杀失败: {str(e)}"
+        }, 500)
 
 # ==================== Web 帮助与运行路由 ====================
 
+@app.route("/ping", methods=["GET", "POST"])
+def handle_ping():
+    return format_response({"handlepush": HANDLEPUSH}, 200)
+
 @app.route("/help", methods=["GET"])
 def get_help():
-    """返回 WebHome.html 页面"""
     html_dir = os.path.dirname(os.path.abspath(__file__))
     html_filename = "WebHome.html"
     
@@ -286,7 +381,6 @@ def get_help():
 
 @app.route("/run", methods=["GET", "POST"])
 def handle_run():
-    """接收 /run 请求，同步执行 handlerun，并将 handlerun 的返回值直接返回"""
     req_data = {}
     req_data.update(request.args.to_dict())
     req_data.update(request.form.to_dict())
@@ -300,36 +394,25 @@ def handle_run():
     print(json.dumps(req_data, ensure_ascii=False, indent=4))
     print("========================================\n")
 
-    # 直接同步调用 handlerun 并获取其返回值
     run_result = handlerun(req_data)
-
-    # 直接将 handlerun 的结果作为 HTTP 响应返回
     return format_response(run_result, 200)
 
 def main():
-    """独立的服务启动主入口"""
-    # 0. 启动时优先检查并请求管理员权限（最多重试5次）
     request_admin_privileges(max_retries=5)
-
-    # 1. 检查并结束占用 25566 端口的原进程
     kill_port_process(LISTEN_PORT)
-
-    # 2. 启动每半小时运行一次 alas_mumu_check 的后台定时线程
     start_alas_mumu_check_timer()
 
-    # 3. 打印提示与发送启动成功通知
     print(f"OnePush接收服务已启动（已获取管理员权限），监听端口：{LISTEN_PORT}")
     PerseusNotifyMsg(
         "OnePush 服务启动成功", 
         f"服务已成功绑定端口 {LISTEN_PORT} 并开始监听请求。"
     )
     print(f"访问地址示例：http://127.0.0.1:{LISTEN_PORT}/push")
-    print(f"帮助页面地址：http://127.0.0.1:{LISTEN_PORT}/help")
-    print(f"运行接口地址：http://127.0.0.1:{LISTEN_PORT}/run")
+    print(f"QBot 启动地址：http://127.0.0.1:{LISTEN_PORT}/bot/start")
+    print(f"QBot 关闭地址：http://127.0.0.1:{LISTEN_PORT}/bot/shutdown")
 
-    # 4. 运行 Flask 实例
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=False)
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()  # 兼容 Windows 打包/多进程机制
+    multiprocessing.freeze_support()
     main()
