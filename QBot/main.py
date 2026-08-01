@@ -85,7 +85,7 @@ class MyClient(botpy.Client):
         elif sub_cmd == "ex":
             if len(args) > 1 and args[1].lower() == "start":
                 try:
-                    subprocess.Popen(["wscript.exe", r"D:\ZouNewFloder\Perseus\begin.vbs"])
+                    subprocess.Popen(["wscript.exe", r"Perseus\begin.vbs"])
                     return "🚀 已成功发起分离运行指令！"
                 except Exception as e:
                     return f"❌ 运行失败: {e}"
