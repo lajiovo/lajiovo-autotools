@@ -7,7 +7,7 @@ from pathlib import Path
 
 # 定义源目录与目标目录
 SRC_DIR = Path(r"\musicdl\data\downloads")
-DST_DIR = Path(r"")
+DST_DIR = Path(r"\Music")
 
 # 音频处理参数
 AUDIO_FILTER = "loudnorm=I=-50:LRA=11:TP=-1.5, dynaudnorm"
@@ -49,9 +49,9 @@ def process_audio():
             "-y",  # 覆盖模式
             "-i",
             str(src_file),
-            "-vn",  # 关键点 1：禁用视频流（去除内嵌专辑封面/图片）
+            "-vn",  # 禁用视频流（去除内嵌封面）
             "-map_metadata",
-            "-1",  # 关键点 2：剥离文件元数据（如图片标签、歌词等）
+            "-1",  # 剥离元数据
             "-af",
             AUDIO_FILTER,
             "-c:a",
@@ -62,9 +62,15 @@ def process_audio():
         ]
 
         try:
-            # 执行 ffmpeg 命令，隐藏冗余的标准输出
+            # 执行 ffmpeg 命令：
+            # 1. creationflags=subprocess.CREATE_NO_WINDOW 用于彻底屏蔽 Windows 控制台弹窗
+            # 2. stdout/stderr 重定向防止标准输出闪烁
             subprocess.run(
-                cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             print(f"  └─ 完成!")
         except subprocess.CalledProcessError as e:
