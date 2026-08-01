@@ -13,6 +13,10 @@ from zMainHandler import run_alas_mumu_check, handlerun, Handlepush
 import zAlas
 import zMumu
 import zPGRJZ
+import zMusicDL
+import win32gui
+import win32con
+from zFfmpeg import process_audio as ffmrun
 
 app = Flask(__name__)
 LISTEN_PORT = 25566
@@ -27,6 +31,13 @@ QBOT_IDENTIFIER = "--PERSEUS_QBOT_INSTANCE"
 HANDLEPUSH = True
 timer_thread = None
 timer_event = threading.Event()  # 用于优雅控制和停止定时器线程
+
+# 2. 新增 MusicDL 相关配置与全局变量
+MUSIC_EXE_PATH = r"\musicdl\music-dl-desktop-rust.exe"
+MUSIC_PORT = 37777
+musicdl_thread = None
+# 2. 全局线程控制对象增加 ffm_thread
+ffmpeg_thread = None
 
 def is_admin():
     """检查当前进程是否具有管理员权限"""
@@ -108,6 +119,128 @@ def kill_port_process(port):
                 pass
     except Exception as e:
         print(f"⚠️ 尝试清理端口 {port} 占用进程时遇到问题: {e}")
+
+# 3. 新增 MusicDL 管理辅助函数
+def hide_window_by_process_name(exe_name="music-dl-desktop-rust.exe", timeout=20):
+    """查找并隐藏指定进程名的 Webview/GUI 窗口，最长重试 timeout 秒"""
+    start_time = time.time()
+    
+    # 获取该进程名的 PID 集合
+    def get_target_pids():
+        pids = set()
+        try:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+            
+            output = subprocess.check_output(
+                f'tasklist /FI "IMAGENAME eq {exe_name}" /FO CSV /NH',
+                shell=True,
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            ).decode('gbk', errors='ignore')
+            
+            for line in output.strip().splitlines():
+                parts = line.split(',')
+                if len(parts) >= 2:
+                    pid_str = parts[1].replace('"', '').strip()
+                    if pid_str.isdigit():
+                        pids.add(int(pid_str))
+        except Exception:
+            pass
+        return pids
+
+    print(f"🔍 正在检索并寻找 {exe_name} 窗口，最长等待 {timeout} 秒...")
+    
+    while time.time() - start_time < timeout:
+        target_pids = get_target_pids()
+        if target_pids:
+            found_hwnds = []
+
+            def enum_windows_callback(hwnd, _):
+                if win32gui.IsWindowVisible(hwnd):
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd) if 'win32process' in globals() else (None, None)
+                    # 也可以使用 ctypes 替代 win32process 避开额外 import
+                    if pid is None:
+                        pid_val = ctypes.c_ulong()
+                        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
+                        pid = pid_val.value
+                        
+                    if pid in target_pids:
+                        found_hwnds.append(hwnd)
+
+            win32gui.EnumWindows(enum_windows_callback, None)
+
+            if found_hwnds:
+                for hwnd in found_hwnds:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                    print(f"🙈 已成功找到并隐藏窗口 (HWND: {hwnd}, PID: {target_pids})")
+                return True
+
+        time.sleep(0.5)
+
+    print(f"⚠️ 超过 {timeout} 秒未捕获到可见的 {exe_name} 窗口，跳过隐藏步骤。")
+    return False
+
+def start_musicdl_services():
+    """正常/前台启动程序 -> 20s内查找并隐藏其Webview窗口 -> 单开线程运行 zMusicDL.main()"""
+    global musicdl_thread
+    stop_musicdl_services()
+
+    if not os.path.exists(MUSIC_EXE_PATH):
+        raise FileNotFoundError(f"未找到路径: {MUSIC_EXE_PATH}")
+
+    # 1. 普通拉起进程，不带SW_HIDE，以便其渲染加载 Webview 窗口
+    print(f"🚀 正在启动音乐客户端程序: {MUSIC_EXE_PATH}")
+    subprocess.Popen(
+        [MUSIC_EXE_PATH],
+        cwd=os.path.dirname(MUSIC_EXE_PATH)
+    )
+
+    # 2. 单开独立后台线程轮询20s来查找并隐藏窗口
+    threading.Thread(
+        target=hide_window_by_process_name, 
+        args=("music-dl-desktop-rust.exe", 20), 
+        daemon=True
+    ).start()
+
+    # 3. 单开独立线程运行 zMusicDL.main()
+    print("🧵 正在单开线程运行 zMusicDL.main()...")
+    musicdl_thread = threading.Thread(target=zMusicDL.main, daemon=True)
+    musicdl_thread.start()
+
+def stop_musicdl_services():
+    """清理 37777 端口，强杀进程，并关闭 musicdl 及 ffm 线程"""
+    global musicdl_thread, ffmpeg_thread
+    
+    print("🧹 正在清理 37777 端口进程...")
+    kill_port_process(MUSIC_PORT)
+    
+    try:
+        if sys.platform.startswith("win"):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+            creationflags = subprocess.CREATE_NO_WINDOW
+            
+            print("🧹 正在清杀 music-dl-desktop-rust.exe 进程...")
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "music-dl-desktop-rust.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
+    except Exception as e:
+        print(f"⚠️ 清理 music-dl 进程发生异常: {e}")
+
+    if musicdl_thread and musicdl_thread.is_alive():
+        print("⏸️ 正在关闭/重置 musicdl 线程引用...")
+        musicdl_thread = None
+
+    if ffmpeg_thread and ffmpeg_thread.is_alive():
+        print("⏸️ 正在关闭/重置 ffm 线程引用...")
+        ffmpeg_thread = None
 
 # ==================== QBot 进程精准查杀与无窗口启动 ====================
 
@@ -397,6 +530,61 @@ def handle_run():
     run_result = handlerun(req_data)
     return format_response(run_result, 200)
 
+# 4. 新增路由响应接口
+# 4. 新增与修改路由控制
+
+@app.route("/music/start", methods=["GET", "POST"])
+def handle_music_start():
+    """接收 /music/start 请求：启动程序、20s内寻找并隐藏窗口，运行 zMusicDL.main()"""
+    try:
+        start_musicdl_services()
+        return format_response({
+            "status": "ok",
+            "message": "MusicDL 已启动，正在轮询隐藏 Webview 窗口并拉起主逻辑"
+        }, 200)
+    except Exception as e:
+        print(f"❌ MusicDL 启动失败: {e}")
+        return format_response({
+            "status": "error",
+            "message": f"MusicDL 启动失败: {str(e)}"
+        }, 500)
+
+@app.route("/music/ffm", methods=["GET", "POST"])
+def handle_music_ffm():
+    """接收 /music/ffm 请求：单开线程执行 ffmrun()"""
+    global ffmpeg_thread
+    try:
+        print("🧵 正在单开线程运行 ffmrun()...")
+        ffmpeg_thread = threading.Thread(target=ffmrun, daemon=True)
+        ffmpeg_thread.start()
+        return format_response({
+            "status": "ok",
+            "message": "ffmrun() 已在后台单开线程成功启动"
+        }, 200)
+    except Exception as e:
+        print(f"❌ ffmrun 启动失败: {e}")
+        return format_response({
+            "status": "error",
+            "message": f"ffmrun 启动失败: {str(e)}"
+        }, 500)
+
+@app.route("/music/stop", methods=["GET", "POST"])
+def handle_music_stop():
+    """接收 /music/stop 请求：清理端口、强杀进程、关闭 musicdl 线程及 ffm 线程"""
+    try:
+        stop_musicdl_services()
+        return format_response({
+            "status": "ok",
+            "message": "MusicDL 进程及 37777 端口已清理，MusicDL 与 ffm 线程已停止"
+        }, 200)
+    except Exception as e:
+        print(f"❌ MusicDL 终止失败: {e}")
+        return format_response({
+            "status": "error",
+            "message": f"MusicDL 终止失败: {str(e)}"
+        }, 500)
+
+
 def main():
     request_admin_privileges(max_retries=5)
     kill_port_process(LISTEN_PORT)
@@ -410,7 +598,8 @@ def main():
     print(f"访问地址示例：http://127.0.0.1:{LISTEN_PORT}/push")
     print(f"QBot 启动地址：http://127.0.0.1:{LISTEN_PORT}/bot/start")
     print(f"QBot 关闭地址：http://127.0.0.1:{LISTEN_PORT}/bot/shutdown")
-
+    print(f"Music 启动地址：http://127.0.0.1:{LISTEN_PORT}/music/start")
+    print(f"Music 关闭地址：http://127.0.0.1:{LISTEN_PORT}/music/stop")
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=False)
 
 if __name__ == "__main__":
