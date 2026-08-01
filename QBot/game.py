@@ -100,6 +100,10 @@ class GameSystem:
         # 初始化 200 艘舰船的随机公共卡池队列
         self.common_pool = []
         self._refill_common_pool()
+        
+        # 扩展小游戏的临时状态缓存
+        self.guess_game_sessions = {}  # {openid: {"target": int, "attempts": int}}
+        self.blackjack_sessions = {}   # {openid: {"player_cards": [], "dealer_cards": []}}
 
     def _generate_one_ship(self):
         """按概率预生成一艘船"""
@@ -184,6 +188,11 @@ class GameSystem:
                     "#出击@某人 - 比对战力对决 ⚔️\n"
                     "#name [名称] - 修改个人名字 🏷️\n"
                     "#钓鱼 - 挥竿钓鱼小游戏 🎣\n"
+                    "#猜数字 [数字/重置] - 猜数字小游戏 🔢\n"
+                    "#21点 [要牌/停牌] - 21点扑克对决 ♠️\n"
+                    "#猜拳 [石头/剪刀/布] - 快捷猜拳 ✂️\n"
+                    "#老虎机 - 摇奖拉霸机 🎰\n"
+                    "#赛跑 [1/2/3] - 选选手竞速比赛 🏃\n"
                     "#船坞 / #背包 - 查看资产与船坞\n"
                     "#排行榜 / #战力榜 - 综合排行榜 🏆\n"
                     "#运势 - 今日专属运势 🔮\n"
@@ -206,6 +215,26 @@ class GameSystem:
 
         elif cmd in ["钓鱼", "fish"]:
             return self.play_fishing(sender_openid)
+
+        # 新增小游戏指令映射
+        elif cmd in ["猜数字", "guess"]:
+            arg = parts[1] if len(parts) > 1 else ""
+            return self.play_guess_number(sender_openid, arg)
+
+        elif cmd in ["21点", "blackjack"]:
+            action = parts[1] if len(parts) > 1 else ""
+            return self.play_blackjack(sender_openid, action)
+
+        elif cmd in ["猜拳", "石头剪刀布", "rps"]:
+            choice = parts[1] if len(parts) > 1 else ""
+            return self.play_rps(sender_openid, choice)
+
+        elif cmd in ["老虎机", "slot", "拉霸"]:
+            return self.play_slot_machine(sender_openid)
+
+        elif cmd in ["赛跑", "race", "赛船"]:
+            choice = parts[1] if len(parts) > 1 else ""
+            return self.play_ship_race(sender_openid, choice)
 
         elif cmd in ["船坞", "背包", "鱼库", "仓库"]:
             return self.get_user_assets(sender_openid)
@@ -419,6 +448,269 @@ class GameSystem:
             f"💰 收益：金币 +{earned_coins} | 经验 +{earned_exp}\n"
             f"📊 资产：现有金币 {user_data['coins']} | 累积经验 {user_data['exp']}"
         )
+
+    # ==================== 新增小游戏实现 ====================
+
+    def play_guess_number(self, sender_openid: str, arg: str) -> str:
+        """1. 猜数字小游戏 (1-100)"""
+        user_data = self._get_user_data(sender_openid)
+        session = self.guess_game_sessions.get(sender_openid)
+
+        if arg == "重置":
+            self.guess_game_sessions[sender_openid] = {"target": random.randint(1, 100), "attempts": 0}
+            return "🔄 猜数字游戏已重新开始！目标数字为 1-100 之间的整数，请输入 `#猜数字 [数字]` 进行猜测。"
+
+        if not session:
+            session = {"target": random.randint(1, 100), "attempts": 0}
+            self.guess_game_sessions[sender_openid] = session
+
+        if not arg or not arg.isdigit():
+            return (f"🔢 【猜数字小游戏】\n"
+                    f"系统已为你生成 1-100 之间的随机数。\n"
+                    f"输入 `#猜数字 50` 进行猜测，输入 `#猜数字 重置` 开启新一局。")
+
+        val = int(arg)
+        session["attempts"] += 1
+        target = session["target"]
+
+        if val < target:
+            return f"📉 太小了！你已经尝试了 {session['attempts']} 次。继续猜："
+        elif val > target:
+            return f"📈 太大了！你已经尝试了 {session['attempts']} 次。继续猜："
+        else:
+            attempts = session["attempts"]
+            del self.guess_game_sessions[sender_openid]
+            
+            # 根据尝试次数给出奖励
+            earned_coins = max(50, 500 - (attempts - 1) * 50)
+            earned_exp = max(20, 200 - (attempts - 1) * 20)
+            user_data["coins"] += earned_coins
+            user_data["exp"] += earned_exp
+            self.data_mgr.save_data()
+
+            return (f"🎉 🎉 恭喜你猜中了！答案就是：{target}\n"
+                    f"⏱️ 共尝试了 {attempts} 次！\n"
+                    f"💰 结算奖励：金币 +{earned_coins} | 经验 +{earned_exp}\n"
+                    f"📊 当前金币：{user_data['coins']}")
+
+    def play_blackjack(self, sender_openid: str, action: str) -> str:
+        """2. 21点扑克小游戏"""
+        user_data = self._get_user_data(sender_openid)
+        session = self.blackjack_sessions.get(sender_openid)
+
+        def card_value(card):
+            if card in ['J', 'Q', 'K']:
+                return 10
+            elif card == 'A':
+                return 11
+            return int(card)
+
+        def calculate_score(cards):
+            score = sum(card_value(c) for c in cards)
+            num_aces = cards.count('A')
+            while score > 21 and num_aces > 0:
+                score -= 10
+                num_aces -= 1
+            return score
+
+        cards_deck = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+
+        if not session or action not in ["要牌", "停牌", "hit", "stand"]:
+            # 初始化对局
+            p_cards = [random.choice(cards_deck), random.choice(cards_deck)]
+            d_cards = [random.choice(cards_deck), random.choice(cards_deck)]
+            self.blackjack_sessions[sender_openid] = {"player_cards": p_cards, "dealer_cards": d_cards}
+            
+            p_score = calculate_score(p_cards)
+            return (f"♠️ 【21点桌游开局】\n"
+                    f"🎴 你的手牌：{' '.join(p_cards)} (点数: {p_score})\n"
+                    f"🃏 庄家明牌：{d_cards[0]} [暗牌]\n"
+                    f"-------------------\n"
+                    f"请输入 `#21点 要牌` 继续摸牌，或 `#21点 停牌` 进行比牌。")
+
+        p_cards = session["player_cards"]
+        d_cards = session["dealer_cards"]
+
+        if action in ["要牌", "hit"]:
+            p_cards.append(random.choice(cards_deck))
+            p_score = calculate_score(p_cards)
+            
+            if p_score > 21:
+                del self.blackjack_sessions[sender_openid]
+                lost = random.randint(50, 150)
+                user_data["coins"] = max(0, user_data["coins"] - lost)
+                self.data_mgr.save_data()
+                return (f"💥 【爆牌了！】\n"
+                        f"🎴 你的手牌：{' '.join(p_cards)} (点数: {p_score})\n"
+                        f"😭 超过21点直接爆牌输掉本局！\n"
+                        f"💸 损失金币：{lost} | 当前金币：{user_data['coins']}")
+            else:
+                return (f"🎴 你要了一张牌：{' '.join(p_cards)} (点数: {p_score})\n"
+                        f"输入 `#21点 要牌` 继续，或 `#21点 停牌` 结算。")
+
+        elif action in ["停牌", "stand"]:
+            del self.blackjack_sessions[sender_openid]
+            p_score = calculate_score(p_cards)
+            d_score = calculate_score(d_cards)
+
+            # 庄家逻辑：小于17点强制补牌
+            while d_score < 17:
+                d_cards.append(random.choice(cards_deck))
+                d_score = calculate_score(d_cards)
+
+            msg = f"🎴 你的最终手牌：{' '.join(p_cards)} ({p_score}点)\n"
+            msg += f"🃏 庄家的最终手牌：{' '.join(d_cards)} ({d_score}点)\n"
+            msg += "-------------------\n"
+
+            if d_score > 21 or p_score > d_score:
+                earned_coins = random.randint(200, 400)
+                earned_exp = random.randint(80, 150)
+                user_data["coins"] += earned_coins
+                user_data["exp"] += earned_exp
+                msg += f"🎉 恭喜你赢了庄家！\n💰 收益：金币 +{earned_coins} | 经验 +{earned_exp}"
+            elif p_score == d_score:
+                msg += "⚖️ 平局！退还本场筹码。"
+            else:
+                lost = random.randint(100, 200)
+                user_data["coins"] = max(0, user_data["coins"] - lost)
+                msg += f"😭 庄家胜出！\n💸 损失：金币 -{lost}"
+
+            self.data_mgr.save_data()
+            return msg
+
+    def play_rps(self, sender_openid: str, choice: str) -> str:
+        """3. 石头剪刀布小游戏"""
+        user_data = self._get_user_data(sender_openid)
+        options = ["石头", "剪刀", "布"]
+        
+        if choice not in options:
+            return "✂️ 请输入正确的选择，例如：`#猜拳 石头` | `#猜拳 剪刀` | `#猜拳 布`"
+
+        bot_choice = random.choice(options)
+        
+        if choice == bot_choice:
+            result = "平局 ⚖️"
+            coin_change = 10
+            exp_change = 5
+        elif (choice == "石头" and bot_choice == "剪刀") or \
+             (choice == "剪刀" and bot_choice == "布") or \
+             (choice == "布" and bot_choice == "石头"):
+            result = "胜利 🏆"
+            coin_change = random.randint(80, 150)
+            exp_change = random.randint(40, 80)
+        else:
+            result = "失败 💥"
+            coin_change = -random.randint(30, 80)
+            exp_change = 0
+
+        user_data["coins"] = max(0, user_data["coins"] + coin_change)
+        user_data["exp"] += exp_change
+        self.data_mgr.save_data()
+
+        return (f"✌️ 【石头剪刀布对决】\n"
+                f"👤 你出：{choice}\n"
+                f"🤖 对方出：{bot_choice}\n"
+                f"-------------------\n"
+                f"🎯 结果：{result}\n"
+                f"💰 变动：金币 {'+' if coin_change >=0 else ''}{coin_change} | 经验 +{exp_change}\n"
+                f"📊 现有金币：{user_data['coins']}")
+
+    def play_slot_machine(self, sender_openid: str) -> str:
+        """4. 老虎机 / 拉霸机"""
+        user_data = self._get_user_data(sender_openid)
+        cost = 50
+        
+        if user_data["coins"] < cost:
+            return f"❌ 你的金币不足！摇一次老虎机需要 {cost} 金币。"
+
+        user_data["coins"] -= cost
+        symbols = ["🍋", "🍒", "🔔", "⭐", "💎", "🌈"]
+        weights = [30, 25, 20, 15, 8, 2] # 概率权重
+
+        reel1 = random.choices(symbols, weights=weights, k=1)[0]
+        reel2 = random.choices(symbols, weights=weights, k=1)[0]
+        reel3 = random.choices(symbols, weights=weights, k=1)[0]
+
+        result_str = f"🎰 【拉霸老虎机】\n[ {reel1} | {reel2} | {reel3} ]\n-------------------\n"
+
+        if reel1 == reel2 == reel3:
+            if reel1 == "🌈":
+                win_coins, win_exp = 2000, 1000
+                result_str += "🌟🌈【SUPER JACKPOT！全屏彩虹特赏！】🌈🌟\n"
+            elif reel1 == "💎":
+                win_coins, win_exp = 1000, 500
+                result_str += "✨💎【大奖爆发！获得钻石连击！】💎✨\n"
+            else:
+                win_coins, win_exp = 500, 200
+                result_str += "🎉【三连大奖命中！】🎉\n"
+        elif reel1 == reel2 or reel2 == reel3 or reel1 == reel3:
+            win_coins, win_exp = 100, 30
+            result_str += "✨【二连对子！小有收获】✨\n"
+        else:
+            win_coins, win_exp = 0, 5
+            result_str += "😭 遗憾未中奖，继续加油！\n"
+
+        user_data["coins"] += win_coins
+        user_data["exp"] += win_exp
+        self.data_mgr.save_data()
+
+        return (f"{result_str}"
+                f"💰 结果结算：金币 +{win_coins} (扣除门票{cost}) | 经验 +{win_exp}\n"
+                f"📊 剩余金币：{user_data['coins']}")
+
+    def play_ship_race(self, sender_openid: str, choice: str) -> str:
+        """5. 舰船赛跑竞技场"""
+        user_data = self._get_user_data(sender_openid)
+        racers = {
+            "1": ("拉菲", "速度型", 0.3),  # 高上限高波动
+            "2": ("企业", "稳定型", 0.1),  # 高稳定性
+            "3": ("雪风", "爆发型", 0.5)   # 极高随机性
+        }
+
+        if choice not in racers:
+            return ("🏃【赛船竞技场】\n"
+                    "请选择你押注的赛艇选手：\n"
+                    "1. 拉菲 (速度型 - 爆发极高但容易瞌睡)\n"
+                    "2. 企业 (稳定型 - 航速稳定冲刺有力)\n"
+                    "3. 雪风 (爆发型 - 极其看运气的奇迹选手)\n\n"
+                    "指令：`#赛跑 1` 或 `#赛跑 2` 或 `#赛跑 3`")
+
+        # 计算跑分
+        scores = {}
+        for num, (name, rtype, variance) in racers.items():
+            base_speed = random.randint(60, 90)
+            bonus = random.uniform(-variance, variance) * 50
+            scores[num] = round(base_speed + bonus, 1)
+
+        sorted_racers = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        winner_num = sorted_racers[0][0]
+
+        chosen_name = racers[choice][0]
+        winner_name = racers[winner_num][0]
+
+        rank_details = "\n".join([f"  第{i+1}名: {racers[n][0]} (成绩: {score}节)" for i, (n, score) in enumerate(sorted_racers)])
+
+        if choice == winner_num:
+            earned_coins = 300
+            earned_exp = 150
+            user_data["coins"] += earned_coins
+            user_data["exp"] += earned_exp
+            msg = f"🎉 猜中了！你押注的【{chosen_name}】勇夺桂冠！\n💰 获得奖励：金币 +{earned_coins} | 经验 +{earned_exp}"
+        else:
+            lost = 50
+            user_data["coins"] = max(0, user_data["coins"] - lost)
+            msg = f"😭 很遗憾！你押注的【{chosen_name}】未能夺冠，冠军是【{winner_name}】！\n💸 扣除报名费：{lost} 金币"
+
+        self.data_mgr.save_data()
+
+        return (f"🏁【海上赛跑比赛结束】\n"
+                f"-------------------\n"
+                f"📊 比赛成绩榜：\n{rank_details}\n"
+                f"-------------------\n"
+                f"{msg}\n"
+                f"📊 当前金币：{user_data['coins']}")
+
+    # =======================================================
 
     def get_user_assets(self, sender_openid: str) -> str:
         user_data = self._get_user_data(sender_openid)
