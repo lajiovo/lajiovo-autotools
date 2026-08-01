@@ -213,8 +213,8 @@ def stop_musicdl_services():
     """清理 37777 端口，强杀进程，并关闭 musicdl 及 ffm 线程"""
     global musicdl_thread, ffmpeg_thread
     
-    print("🧹 正在清理 37777 端口进程...")
-    kill_port_process(MUSIC_PORT)
+    # print("🧹 正在清理 37777 端口进程...")
+    # kill_port_process(MUSIC_PORT)
     
     try:
         if sys.platform.startswith("win"):
