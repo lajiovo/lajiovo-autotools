@@ -2,6 +2,7 @@ import os
 import asyncio
 import urllib.parse
 import urllib.request
+import subprocess
 
 import botpy
 from botpy.message import GroupMessage
@@ -80,6 +81,15 @@ class MyClient(botpy.Client):
             if self.bot_loop:
                 asyncio.run_coroutine_threadsafe(self.shutdown_system("OP 指令触发"), self.bot_loop)
             return "🛑 正在准备关闭程序并通知群 2..."
+
+        elif sub_cmd == "ex":
+            if len(args) > 1 and args[1].lower() == "start":
+                try:
+                    subprocess.Popen(["wscript.exe", r"D:\ZouNewFloder\Perseus\begin.vbs"])
+                    return "🚀 已成功发起分离运行指令！"
+                except Exception as e:
+                    return f"❌ 运行失败: {e}"
+            return "⚠️ 请使用正确格式：`#op ex start`"
 
         elif sub_cmd == "run":
             if len(args) < 2:
