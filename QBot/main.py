@@ -77,7 +77,43 @@ class MyClient(botpy.Client):
         if not is_op:
             return "❌ 权限不足！只有现有的 OP 管理员才能执行 OP 管理指令。"
 
-        if sub_cmd == "shutdown":
+        # ------------------- 帮助指令 -------------------
+        if sub_cmd in ["help", "?", "帮助"]:
+            return (
+                "👑 【OP 管理员指令列表】\n"
+                "-------------------------\n"
+                "📌 【机器人基础控制】\n"
+                "• #op help - 查看所有 OP 指令\n"
+                "• #op stop - 暂停机器人功能 (维护模式，屏蔽消息回复)\n"
+                "• #op start - 恢复机器人功能\n"
+                "• #op shutdown - 关闭机器人程序并通知群 2\n"
+                "• #op list - 查看所有 OP 管理员\n"
+                "• #op add [@某人/OpenID] - 添加管理员\n"
+                "• #op del/remove [@某人/OpenID] - 移除管理员\n\n"
+                "📌 【群绑定管理】\n"
+                "• #op group <数字> - 标记当前群编号 (例: #op group 1)\n"
+                "• #op group list - 查看所有群编号绑定\n"
+                "• #op group get - 查看当前群编号\n\n"
+                "📌 【任务运行接口 (#op run <任务>)】\n"
+                "• #op run ikun - 执行 alas与mumu 双向状态检查与恢复\n"
+                "• #op run alas <start/restart/kill/hide/online> - 控制 Alas 进程\n"
+                "• #op run mumu <start/kill/hide/online> - 控制 MuMu 模拟器进程\n"
+                "• #op run pw 或 playwright - 启动 Playwright 自动化任务\n"
+                "• #op run pg 或 pgrjz - 启动 PGRJZ 自动化运行\n"
+                "• #op ex start - 运行外部 begin.vbs 启动脚本\n\n"
+                "📌 【25566 后台服务控制 (#op sv <指令>)】\n"
+                "• #op sv ping - 检查后台服务状态及 Handlepush 开关\n"
+                "• #op sv start - 恢复后台服务及定时检查 (run_alas_mumu_check)\n"
+                "• #op sv stop - 暂停后台推送并释放 Alas/Mumu 进程\n"
+                "• #op sv shutdown - 关闭 25566 后台接收服务\n"
+                "• #op sv bot/start - 重新无窗口启动 QBot\n"
+                "• #op sv bot/shutdown - 精准清理/关闭 QBot 进程\n"
+                "• #op sv music/start - 后台启动 MusicDL 服务并隐藏窗口\n"
+                "• #op sv music/ffm - 单开线程运行音频处理任务 (ffmpeg)\n"
+                "• #op sv music/stop - 停止 MusicDL 服务及清理 37777 端口"
+            )
+
+        elif sub_cmd == "shutdown":
             if self.bot_loop:
                 asyncio.run_coroutine_threadsafe(self.shutdown_system("OP 指令触发"), self.bot_loop)
             return "🛑 正在准备关闭程序并通知群 2..."
@@ -85,7 +121,7 @@ class MyClient(botpy.Client):
         elif sub_cmd == "ex":
             if len(args) > 1 and args[1].lower() == "start":
                 try:
-                    subprocess.Popen(["wscript.exe", r"Perseus\begin.vbs"])
+                    subprocess.Popen(["wscript.exe", r"\Perseus\begin.vbs"])
                     return "🚀 已成功发起分离运行指令！"
                 except Exception as e:
                     return f"❌ 运行失败: {e}"
@@ -95,8 +131,6 @@ class MyClient(botpy.Client):
             if len(args) < 2:
                 return "⚠️ 请提供运行参数，例如：`#op run task1,task2`"
             try:
-                # 💡 修改点 1：如果你想访问外部/自建的目标服务端口，将 TARGET_PORT 改为你自建服务的实际端口（如 25565 等）
-                # 如果依然使用本地 25566 端口，直接保证自建服务监听该端口即可
                 target_port = getattr(self.data_mgr, "target_port", 25566)
                 url = f"http://127.0.0.1:{target_port}/run?task={urllib.parse.quote(' '.join(args[1:]))}"
                 
@@ -113,7 +147,6 @@ class MyClient(botpy.Client):
             sv_action = args[1].lower()
             extra_params = " ".join(args[2:]) if len(args) > 2 else ""
             
-            # 💡 修改点 2：支持灵活配置目标端口，避免混淆“机器人自身监听端口”与“游戏/目标服务器端口”
             target_port = getattr(self.data_mgr, "target_port", 25566)
             url = f"http://127.0.0.1:{target_port}/{sv_action}"
             if extra_params:
@@ -177,7 +210,7 @@ class MyClient(botpy.Client):
                 return f"🗑️ 已取消用户 [{target_id[:6]}...] 的 OP 权限。"
             return "ℹ️ 该用户不是 OP。"
 
-        return "⚠️ 未知的 OP 命令。"
+        return "⚠️ 未知的 OP 命令。可使用 `#op help` 查看帮助。"
 
 
     async def process_command(self, content: str, sender_openid: str, raw_message: GroupMessage, group_id: str) -> str:
@@ -190,8 +223,9 @@ class MyClient(botpy.Client):
         if cmd == "ping":
             return f"Pong! 机器人正常运行中 ⚡\n当前服务状态：{'正常开启' if self.data_mgr.system_active else '暂停维护中'}"
 
+        # 维护状态下，直接返回 None，完全不回复其他任何消息
         if not self.data_mgr.system_active:
-            return "🛑 机器人当前处于维护状态。"
+            return None
 
         # 其余所有指令（包括未知指令/帮助指令）统一移交 game_sys 处理
         return self.game_sys.handle_command(cmd, parts, sender_openid)
@@ -208,10 +242,11 @@ class MyClient(botpy.Client):
 
         if content.startswith("#"):
             reply_text = await self.process_command(content, sender_openid, message, group_id)
-            try:
-                await self.api.post_group_message(group_openid=group_id, msg_type=0, msg_id=msg_id, content=reply_text)
-            except Exception as e:
-                _log.error(f"指令回复失败: {e}")
+            if reply_text:  # 仅在有返回文字时才进行消息发送
+                try:
+                    await self.api.post_group_message(group_openid=group_id, msg_type=0, msg_id=msg_id, content=reply_text)
+                except Exception as e:
+                    _log.error(f"指令回复失败: {e}")
 
     async def on_group_at_message_create(self, message: GroupMessage):
         await self._handle_group_msg(message, "on_group_at_message_create")
