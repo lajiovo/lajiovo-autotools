@@ -13,7 +13,6 @@ DST_DIR = Path(r"\Music")
 AUDIO_FILTER = "loudnorm=I=-50:LRA=11:TP=-1.5, dynaudnorm"
 BITRATE = "64k"
 
-
 def process_audio():
     # 确保目标目录存在
     DST_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,7 +50,20 @@ def process_audio():
             str(src_file),
             "-vn",  # 禁用视频流（去除内嵌封面）
             "-map_metadata",
-            "-1",  # 剥离元数据
+            "0",  # 保留输入文件的元数据
+            # 抹除除 artist 之外的其他常见元数据标签
+            "-metadata",
+            "title=",
+            "-metadata",
+            "album=",
+            "-metadata",
+            "track=",
+            "-metadata",
+            "date=",
+            "-metadata",
+            "genre=",
+            "-metadata",
+            "comment=",
             "-af",
             AUDIO_FILTER,
             "-c:a",
@@ -84,3 +96,4 @@ def process_audio():
 
 if __name__ == "__main__":
     process_audio()
+
