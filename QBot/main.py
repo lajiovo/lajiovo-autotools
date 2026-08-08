@@ -1,264 +1,550 @@
-import os
 import asyncio
-import urllib.parse
-import urllib.request
-import subprocess
+import base64
+import os
+import time
+import traceback
 
 import botpy
 from botpy.message import GroupMessage
+from botpy.types.message import MarkdownPayload, MessageMarkdownParams
 
-from config import APP_ID, APP_SECRET, _log, apply_sdk_patch, DataManager
+from config import APP_ID, APP_SECRET, DataManager, _log, apply_sdk_patch
 from game import GameSystem
+from opcmd import handle_op_command
 from server import start_http_servers
 
 apply_sdk_patch()
 
+
 class MyClient(botpy.Client):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.bot_loop = None
-        self.data_mgr = DataManager()
-        self.game_sys = GameSystem(self.data_mgr)
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.start_time = time.time()  # 记录程序初始化开机时间戳
+    self.bot_loop = None
+    self.data_mgr = DataManager()
+    self.game_sys = GameSystem(self.data_mgr)
 
-    async def on_ready(self):
-        _log.info(f"robot 「{self.robot.name}」 已成功上线！")
-        self.bot_loop = asyncio.get_running_loop()
-        start_http_servers(self)
-        await self.notify_group_2("🟢 机器人已上线并准备就绪！")
+  async def on_ready(self):
+    _log.info(f"robot 「{self.robot.name}」 已成功上线！")
+    self.bot_loop = asyncio.get_running_loop()
+    start_http_servers(self)
+    await self.notify_group_3("🟢 机器人已上线并准备就绪！")
 
-    async def notify_group_2(self, message: str):
-        target_openid = next((gid for gid, num in self.data_mgr.group_tags.items() if num == 2), None)
-        if target_openid:
-            try:
-                await self.api.post_group_message(group_openid=target_openid, msg_type=0, content=message)
-                _log.info(f"📢 [群2通知成功] 内容: {message}")
-            except Exception as e:
-                _log.error(f"❌ 发送群 2 通知失败: {e}")
+  # ------------------- 核心 HTTP 底层请求封装 -------------------
+  async def _raw_post(self, route_path: str, payload: dict, **path_params):
+    """通用底层 HTTP POST 请求，绕过 SDK 强类型校验"""
+    route = botpy.http.Route("POST", route_path, **path_params)
+    http_client = getattr(self.api, "_http", None) or getattr(
+        self, "_http", None
+    )
+    if not http_client:
+      raise AttributeError("未能获取到 SDK 底层 _http 请求对象")
+    return await http_client.request(route, json=payload)
+
+  # ------------------- 1. 文本/引用消息发送接口 -------------------
+  async def send_group_text(
+      self,
+      group_openid: str,
+      content: str,
+      msg_id: str = "",
+      ref_msg_id: str = None,
+  ):
+    """发送纯文本消息 (msg_type=0)，支持引用回复"""
+    kwargs = {
+        "group_openid": group_openid,
+        "msg_type": 0,
+        "content": content,
+        "msg_id": msg_id,
+    }
+    if ref_msg_id:
+      kwargs["message_reference"] = {"message_id": ref_msg_id}
+
+    await self.api.post_group_message(**kwargs)
+    _log.info(f"💬 [文本/引用消息发送成功] OpenID: {group_openid}")
+
+  # ------------------- 2. Markdown & 内嵌键盘接口 -------------------
+  async def send_group_markdown_by_content(
+      self,
+      group_openid: str,
+      content: str,
+      msg_id: str = "",
+      keyboard: dict = None,
+  ):
+    """通过原生的 Markdown 文本内容发送群消息 (msg_type=2)，支持拼接内嵌键盘"""
+    markdown = MarkdownPayload(content=content)
+    kwargs = {
+        "group_openid": group_openid,
+        "msg_type": 2,
+        "markdown": markdown,
+        "msg_id": msg_id,
+    }
+    if keyboard:
+      kwargs["keyboard"] = keyboard
+
+    await self.api.post_group_message(**kwargs)
+    _log.info(f"📢 [Markdown 发送成功] OpenID: {group_openid}")
+
+  async def send_group_markdown_by_template(
+      self,
+      group_openid: str,
+      template_id: str,
+      params_dict: dict,
+      msg_id: str = "",
+      keyboard: dict = None,
+  ):
+    """通过自定义模板 ID 和参数列表发送 Markdown 消息"""
+    params = [
+        MessageMarkdownParams(key=k, values=v if isinstance(v, list) else [v])
+        for k, v in params_dict.items()
+    ]
+    markdown = MarkdownPayload(
+        custom_template_id=template_id, params=params
+    )
+    kwargs = {
+        "group_openid": group_openid,
+        "msg_type": 2,
+        "markdown": markdown,
+        "msg_id": msg_id,
+    }
+    if keyboard:
+      kwargs["keyboard"] = keyboard
+
+    await self.api.post_group_message(**kwargs)
+    _log.info(f"📢 [Markdown 模板发送成功] OpenID: {group_openid}")
+
+  # ------------------- 3. 本地/网络富媒体图片发送接口 -------------------
+  async def send_group_image(
+      self,
+      group_openid: str,
+      file_path_or_url: str,
+      content: str = "",
+      msg_id: str = "",
+      ref_msg_id: str = None,
+  ):
+    """支持本地路径或网络 URL 发送群图片 (msg_type=7)"""
+    _log.info(f"🖼️ 正在处理群图片发送: {file_path_or_url}")
+
+    if file_path_or_url.startswith("http://") or file_path_or_url.startswith(
+        "https://"
+    ):
+      upload_res = await self.api.post_group_file(
+          group_openid=group_openid, file_type=1, url=file_path_or_url
+      )
+    else:
+      if not os.path.exists(file_path_or_url):
+        raise FileNotFoundError(f"本地图片不存在: {file_path_or_url}")
+
+      with open(file_path_or_url, "rb") as f:
+        file_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+      upload_payload = {"file_type": 1, "file_data": file_base64}
+      upload_res = await self._raw_post(
+          "/v2/groups/{group_openid}/files",
+          upload_payload,
+          group_openid=group_openid,
+      )
+
+    file_info = (
+        upload_res.get("file_info")
+        if isinstance(upload_res, dict)
+        else getattr(upload_res, "file_info", upload_res)
+    )
+
+    kwargs = {
+        "group_openid": group_openid,
+        "msg_type": 7,
+        "msg_id": msg_id,
+        "media": {"file_info": file_info},
+    }
+    if ref_msg_id:
+      kwargs["message_reference"] = {"message_id": ref_msg_id}
+
+    await self.api.post_group_message(**kwargs)
+    _log.info(f"🖼️ [富媒体图片发送成功] OpenID: {group_openid}")
+
+  # ------------------- 4. 图文卡片消息发送接口 -------------------
+  async def send_group_card(
+      self,
+      group_openid: str,
+      title: str,
+      desc: str,
+      pic_url: str,
+      jump_url: str,
+      msg_id: str = "",
+  ):
+    """发送图文卡片消息 (msg_type=8)"""
+    payload = {
+        "msg_type": 8,
+        "card": {
+            "type": "tuwen",
+            "content": {
+                "title": title,
+                "description": desc,
+                "pic_url": pic_url,
+                "url": jump_url,
+            },
+        },
+    }
+    if msg_id:
+      payload["msg_id"] = msg_id
+
+    await self._raw_post(
+        "/v2/groups/{group_openid}/messages",
+        payload,
+        group_openid=group_openid,
+    )
+    _log.info(f"🃏 [图文卡片发送成功] OpenID: {group_openid}")
+
+  # ---------------------------------------------------------
+
+  async def notify_group_3(self, message: str):
+    """上下线通知群（默认群 3）"""
+    target_group_num = getattr(self.data_mgr, "notify_group_num", 3)
+    target_openid = next(
+        (
+            gid
+            for gid, num in self.data_mgr.group_tags.items()
+            if num == target_group_num
+        ),
+        None,
+    )
+
+    if target_openid:
+      try:
+        await self.api.post_group_message(
+            group_openid=target_openid, msg_type=0, content=message
+        )
+        _log.info(f"📢 [群{target_group_num}通知成功] 内容: {message}")
+      except Exception as e:
+        _log.error(f"❌ 发送群 {target_group_num} 通知失败: {e}")
+    else:
+      _log.info(f"ℹ️ 未绑定【群 {target_group_num}】，跳过通知。")
+
+  async def shutdown_system(self, reason: str = "系统下线"):
+    _log.info(f"🛑 正在执行系统退出程序... 原因: {reason}")
+    await self.notify_group_3(
+        f"🔴 机器人收到下线指令 ({reason})，正在退出..."
+    )
+    await asyncio.sleep(1)
+    os._exit(0)
+
+  async def push_message_to_group(
+      self, msg_content: str, target_group_num: str
+  ):
+    push_active = getattr(self.data_mgr, "push_active", True)
+    if not push_active:
+      _log.info("ℹ️ Push 功能已关闭，跳过推送。")
+      return
+
+    target_openid, warning_msg = None, ""
+    effective_group_num = target_group_num or getattr(
+        self.data_mgr, "push_target_group", None
+    )
+
+    if effective_group_num and str(effective_group_num).isdigit():
+      num_int = int(effective_group_num)
+      target_openid = next(
+          (
+              gid
+              for gid, num in self.data_mgr.group_tags.items()
+              if num == num_int
+          ),
+          None,
+      )
+
+    if not target_openid:
+      target_openid = next(
+          (gid for gid, num in self.data_mgr.group_tags.items() if num == 1),
+          None,
+      )
+      if effective_group_num:
+        warning_msg = (
+            f"\n\n⚠️ [系统提示] 未找到绑定的群 {effective_group_num}，已默认推送至群 1"
+        )
+
+    if not target_openid:
+      _log.error(
+          f"❌ 推送失败：未找到群 {effective_group_num}，且数据库中未绑定【群 1】。"
+      )
+      return
+
+    try:
+      await self.api.post_group_message(
+          group_openid=target_openid,
+          msg_type=0,
+          content=f"{msg_content}{warning_msg}",
+      )
+      _log.info(f"📢 [推送成功] OpenID: {target_openid}")
+    except Exception as e:
+      _log.error(f"❌ 推送消息失败: {e}")
+
+  def handle_op_command(
+      self,
+      args: list,
+      sender_openid: str,
+      raw_message: GroupMessage,
+      group_id: str,
+  ) -> str:
+    return handle_op_command(self, args, sender_openid, raw_message, group_id)
+
+  async def process_command(
+      self,
+      content: str,
+      sender_openid: str,
+      raw_message: GroupMessage,
+      group_id: str,
+  ):
+    parts = content[1:].strip().split()
+    cmd = parts[0].lower() if parts else ""
+    sub_cmd = parts[1].lower() if len(parts) > 1 else ""
+
+    # 测试指令分发
+    if cmd == "test":
+      try:
+        # 1. 帮助菜单（纯文本，不要 Markdown）
+        if sub_cmd == "help" or not sub_cmd:
+          help_text = (
+              "🧪 测试指令全集说明\n"
+              "可以使用以下子指令进行各种 QQ 开放平台消息格式测试：\n\n"
+              "#test help : 查看当前测试帮助菜单（纯文本）\n"
+              "#test md : 测试发送原生 Markdown 渲染消息 (msg_type=2)\n"
+              "#test img : 发送本地指定路径图片 (suoha.png)\n"
+              "#test card : 测试发送英仙座号简介图文卡片 (msg_type=8)\n"
+              "#test keyboard : 测试 Markdown 结合自定义内嵌按钮\n"
+              "#test refer : 测试带上下文的引用回复 (message_reference)"
+          )
+          await self.send_group_text(
+              group_id, help_text, msg_id=raw_message.id
+          )
+          return None
+
+        # 2. Markdown 测试
+        elif sub_cmd == "md":
+          test_md = (
+              "# 🧪 Markdown 测试成功！\n"
+              "## 状态：正常运行中\n"
+              "- **发送者**：`"
+              f"{sender_openid[:6]}...`\n"
+              "- **消息类型**：Markdown (msg_type=2)\n"
+              "> 这是一条用于测试机器人 Markdown 渲染效果的消息。"
+          )
+          await self.send_group_markdown_by_content(
+              group_id, test_md, msg_id=raw_message.id
+          )
+          return None
+
+        # 3. 本地富媒体图片测试 (#test img)
+        elif sub_cmd == "img":
+          local_img_path = r"suoha.png"
+          await self.send_group_image(
+              group_openid=group_id,
+              file_path_or_url=local_img_path,
+              content="🖼️ 本地图片上传测试成功！",
+              msg_id=raw_message.id,
+          )
+          return None
+
+        # 4. 图文卡片测试 (修改为英仙座号简介)
+        elif sub_cmd == "card":
+          await self.send_group_card(
+              group_openid=group_id,
+              title="HMS Perseus (英仙座号)",
+              desc="巨化级轻型航空母舰 · 英仙座，随时准备为你提供技术与战术支援！",
+              pic_url="https://qqminiapp.cdn-go.cn/qq-open-platform/9b9327f1/assets/33-2-GiI9drV8.png",
+              jump_url="https://q.qq.com/#/",
+              msg_id=raw_message.id,
+          )
+          return None
+
+        # 5. 内嵌键盘测试 (keyboard)
+        elif sub_cmd == "keyboard":
+          test_md = "## ⌨️ 按钮交互测试\n请点击下方按钮测试指令触发展示："
+          test_keyboard = {
+              "content": {
+                  "rows": [{
+                      "buttons": [
+                          {
+                              "id": "btn_ping",
+                              "render_data": {
+                                  "label": "⚡ Ping 测试",
+                                  "style": 1,
+                              },
+                              "action": {
+                                  "type": 2,
+                                  "permission": {"type": 2},
+                                  "data": "#ping",
+                                  "enter": True,
+                              },
+                          },
+                          {
+                              "id": "btn_help",
+                              "render_data": {
+                                  "label": "📖 帮助菜单",
+                                  "style": 0,
+                              },
+                              "action": {
+                                  "type": 2,
+                                  "permission": {"type": 2},
+                                  "data": "#test help",
+                                  "enter": True,
+                              },
+                          },
+                      ]
+                  }]
+              }
+          }
+          await self.send_group_markdown_by_content(
+              group_id, test_md, msg_id=raw_message.id, keyboard=test_keyboard
+          )
+          return None
+
+        # 6. 引用回复测试 (message_reference)
+        elif sub_cmd == "refer":
+          orig_msg_id = getattr(raw_message, "id", "未知 ID")
+          orig_content = getattr(raw_message, "content", "未知内容")
+
+          reply_content = (
+              f"📌 引用成功！\n"
+              f"-------------------\n"
+              f"【被引用消息 ID】: {orig_msg_id}\n"
+              f"【被引用原内容】: \"{orig_content}\"\n"
+              f"-------------------\n"
+              f"已成功建立 message_reference 上下文关联！"
+          )
+
+          await self.send_group_text(
+              group_openid=group_id,
+              content=reply_content,
+              msg_id=orig_msg_id,
+              ref_msg_id=orig_msg_id,
+          )
+          return None
+
         else:
-            _log.info("ℹ️ 未绑定【群 2】，跳过群 2 通知。")
+          return "⚠️ 未知测试指令，请输入 `#test help` 查看可用测试列表"
 
-    async def shutdown_system(self, reason: str = "系统下线"):
-        _log.info(f"🛑 正在执行系统退出程序... 原因: {reason}")
-        await self.notify_group_2(f"🔴 机器人收到下线指令 ({reason})，正在退出...")
-        await asyncio.sleep(1)
-        os._exit(0)
+      except Exception as e:
+        err_msg = f"❌ [#test {sub_cmd} 执行报错]\n错误类型: {type(e).__name__}\n错误细节: {e}"
+        _log.error(f"测试指令异常: {e}\n{traceback.format_exc()}")
+        return err_msg
 
-    async def push_message_to_group(self, msg_content: str, target_group_num: str):
-        target_openid, warning_msg = None, ""
+    # #op 指令直接返回普通字符串消息
+    if cmd == "op":
+      return self.handle_op_command(
+          parts[1:], sender_openid, raw_message, group_id
+      )
 
-        if target_group_num and str(target_group_num).isdigit():
-            num_int = int(target_group_num)
-            target_openid = next((gid for gid, num in self.data_mgr.group_tags.items() if num == num_int), None)
+    if cmd == "ping":
+      elapsed_seconds = int(time.time() - self.start_time)
+      days, remainder = divmod(elapsed_seconds, 86400)
+      hours, remainder = divmod(remainder, 3600)
+      minutes, seconds = divmod(remainder, 60)
 
-        if not target_openid:
-            target_openid = next((gid for gid, num in self.data_mgr.group_tags.items() if num == 1), None)
-            if target_group_num:
-                warning_msg = f"\n\n⚠️ [系统提示] 未找到绑定的群 {target_group_num}，已默认推送至群 1"
+      uptime_str = ""
+      if days > 0:
+        uptime_str += f"{days}天"
+      if hours > 0 or days > 0:
+        uptime_str += f"{hours}小时"
+      if minutes > 0 or hours > 0 or days > 0:
+        uptime_str += f"{minutes}分"
+      uptime_str += f"{seconds}秒"
 
-        if not target_openid:
-            _log.error(f"❌ 推送失败：未找到群 {target_group_num}，且数据库中未绑定【群 1】。")
-            return
+      status_text = (
+          "正常开启" if self.data_mgr.system_active else "暂停维护中"
+      )
+      return (
+          f"Pong! 机器人正常运行中 ⚡\n当前服务状态：{status_text}\n已连续运行：{uptime_str}"
+      )
 
+    # 维护状态下，直接返回 None，不响应其他指令
+    if not self.data_mgr.system_active:
+      return None
+
+    # ------------------- #game 等其他指令分发与动态消息类型处理 -------------------
+    game_res = self.game_sys.handle_command(cmd, parts, sender_openid)
+
+    # 支持 handle_command 返回字典格式，灵活判定 msg_type
+    if isinstance(game_res, dict):
+      msg_type = game_res.get("msg_type", 0)
+      # msg_type = 2: Markdown / Keyboard
+      if msg_type == 2:
+        await self.send_group_markdown_by_content(
+            group_openid=group_id,
+            content=game_res.get("content", ""),
+            msg_id=raw_message.id,
+            keyboard=game_res.get("keyboard"),
+        )
+      # msg_type = 7: 富媒体/图片
+      elif msg_type == 7:
+        await self.send_group_image(
+            group_openid=group_id,
+            file_path_or_url=game_res.get("url") or game_res.get("file_path"),
+            content=game_res.get("content", ""),
+            msg_id=raw_message.id,
+        )
+      # msg_type = 8: 卡片
+      elif msg_type == 8:
+        card = game_res.get("card", {})
+        card_content = card.get("content", {})
+        await self.send_group_card(
+            group_openid=group_id,
+            title=card_content.get("title", ""),
+            desc=card_content.get("description", ""),
+            pic_url=card_content.get("pic_url", ""),
+            jump_url=card_content.get("url", ""),
+            msg_id=raw_message.id,
+        )
+      # 默认普通文本
+      else:
+        await self.send_group_text(
+            group_openid=group_id,
+            content=game_res.get("content", ""),
+            msg_id=raw_message.id,
+        )
+      return None
+
+    # 若返回普通字符串，则交给 _handle_group_msg 发送纯文本消息
+    return game_res
+
+  async def _handle_group_msg(self, message: GroupMessage, event_name: str):
+    content = getattr(message, "content", "").strip()
+    group_id = getattr(message, "group_openid", "")
+    msg_id = getattr(message, "id", "")
+    author = getattr(message, "author", None)
+    sender_openid = (
+        getattr(author, "member_openid", "未知用户") if author else "未知用户"
+    )
+    sender_openid = sender_openid.upper()
+
+    _log.info(
+        f"[{event_name}] 群消息 | 群ID: {group_id} | 发送者: {sender_openid} |"
+        f" 内容: {content}"
+    )
+
+    if content.startswith("#"):
+      reply_text = await self.process_command(
+          content, sender_openid, message, group_id
+      )
+      if reply_text:  # 仅在有返回文字时才进行普通消息发送
         try:
-            await self.api.post_group_message(group_openid=target_openid, msg_type=0, content=f"{msg_content}{warning_msg}")
-            _log.info(f"📢 [推送成功] OpenID: {target_openid}")
+          await self.api.post_group_message(
+              group_openid=group_id, msg_type=0, msg_id=msg_id, content=reply_text
+          )
         except Exception as e:
-            _log.error(f"❌ 推送消息失败: {e}")
+          _log.error(f"指令回复失败: {e}")
 
-    def handle_op_command(self, args: list, sender_openid: str, raw_message: GroupMessage, group_id: str) -> str:
-        is_op = sender_openid in self.data_mgr.op_list
+  async def on_group_at_message_create(self, message: GroupMessage):
+    await self._handle_group_msg(message, "on_group_at_message_create")
 
-        if not args:
-            group_tag_info = f"（当前群编号：群 {self.data_mgr.group_tags[group_id]}）" if group_id in self.data_mgr.group_tags else ""
-            return f"👑 欢迎，尊贵的管理员！当前系统运行正常。{group_tag_info}" if is_op else f"👋 你好呀！快去试试 #钓鱼 或 #打捞 吧！{group_tag_info}"
-
-        sub_cmd = args[0].lower()
-        if not is_op:
-            return "❌ 权限不足！只有现有的 OP 管理员才能执行 OP 管理指令。"
-
-        # ------------------- 帮助指令 -------------------
-        if sub_cmd in ["help", "?", "帮助"]:
-            return (
-                "👑 【OP 管理员指令列表】\n"
-                "-------------------------\n"
-                "📌 【机器人基础控制】\n"
-                "• #op help - 查看所有 OP 指令\n"
-                "• #op stop - 暂停机器人功能 (维护模式，屏蔽消息回复)\n"
-                "• #op start - 恢复机器人功能\n"
-                "• #op shutdown - 关闭机器人程序并通知群 2\n"
-                "• #op list - 查看所有 OP 管理员\n"
-                "• #op add [@某人/OpenID] - 添加管理员\n"
-                "• #op del/remove [@某人/OpenID] - 移除管理员\n\n"
-                "📌 【群绑定管理】\n"
-                "• #op group <数字> - 标记当前群编号 (例: #op group 1)\n"
-                "• #op group list - 查看所有群编号绑定\n"
-                "• #op group get - 查看当前群编号\n\n"
-                "📌 【任务运行接口 (#op run <任务>)】\n"
-                "• #op run ikun - 执行 alas与mumu 双向状态检查与恢复\n"
-                "• #op run alas <start/restart/kill/hide/online> - 控制 Alas 进程\n"
-                "• #op run mumu <start/kill/hide/online> - 控制 MuMu 模拟器进程\n"
-                "• #op run pw 或 playwright - 启动 Playwright 自动化任务\n"
-                "• #op run pg 或 pgrjz - 启动 PGRJZ 自动化运行\n"
-                "• #op ex start - 运行外部 begin.vbs 启动脚本\n\n"
-                "📌 【25566 后台服务控制 (#op sv <指令>)】\n"
-                "• #op sv ping - 检查后台服务状态及 Handlepush 开关\n"
-                "• #op sv start - 恢复后台服务及定时检查 (run_alas_mumu_check)\n"
-                "• #op sv stop - 暂停后台推送并释放 Alas/Mumu 进程\n"
-                "• #op sv shutdown - 关闭 25566 后台接收服务\n"
-                "• #op sv bot/start - 重新无窗口启动 QBot\n"
-                "• #op sv bot/shutdown - 精准清理/关闭 QBot 进程\n"
-                "• #op sv music/start - 后台启动 MusicDL 服务并隐藏窗口\n"
-                "• #op sv music/ffm - 单开线程运行音频处理任务 (ffmpeg)\n"
-                "• #op sv music/stop - 停止 MusicDL 服务及清理 37777 端口"
-            )
-
-        elif sub_cmd == "shutdown":
-            if self.bot_loop:
-                asyncio.run_coroutine_threadsafe(self.shutdown_system("OP 指令触发"), self.bot_loop)
-            return "🛑 正在准备关闭程序并通知群 2..."
-
-        elif sub_cmd == "ex":
-            if len(args) > 1 and args[1].lower() == "start":
-                try:
-                    subprocess.Popen(["wscript.exe", r"\Perseus\begin.vbs"])
-                    return "🚀 已成功发起分离运行指令！"
-                except Exception as e:
-                    return f"❌ 运行失败: {e}"
-            return "⚠️ 请使用正确格式：`#op ex start`"
-
-        elif sub_cmd == "run":
-            if len(args) < 2:
-                return "⚠️ 请提供运行参数，例如：`#op run task1,task2`"
-            try:
-                target_port = getattr(self.data_mgr, "target_port", 25566)
-                url = f"http://127.0.0.1:{target_port}/run?task={urllib.parse.quote(' '.join(args[1:]))}"
-                
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                res = urllib.request.urlopen(req, timeout=3).read().decode('utf-8')
-                return f"🚀 已发送请求至 {target_port} 端口，响应：{res}"
-            except Exception as e:
-                return f"❌ 调用目标 /run 接口失败: {e}"
-
-        elif sub_cmd == "sv":
-            if len(args) < 2:
-                return "⚠️ 请提供服务器操作指令，例如：`#op sv ping` 或 `#op sv stop`"
-            
-            sv_action = args[1].lower()
-            extra_params = " ".join(args[2:]) if len(args) > 2 else ""
-            
-            target_port = getattr(self.data_mgr, "target_port", 25566)
-            url = f"http://127.0.0.1:{target_port}/{sv_action}"
-            if extra_params:
-                url += f"?task={urllib.parse.quote(extra_params)}"
-                
-            try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                res = urllib.request.urlopen(req, timeout=3).read().decode('utf-8')
-                return f"🌐 [{target_port} 服务响应] /{sv_action}:\n{res}"
-            except Exception as e:
-                return f"❌ 调用 {target_port} /{sv_action} 接口失败: {e}"
-
-        elif sub_cmd == "list":
-            return "👑 【管理员 OP 名单】\n" + "\n".join([f"- {op_id[:6]}... ({op_id})" for op_id in self.data_mgr.op_list])
-
-        elif sub_cmd == "stop":
-            self.data_mgr.system_active = False
-            self.data_mgr.save_data()
-            return "🛑 已成功暂停娱乐与辅助功能！"
-
-        elif sub_cmd == "start":
-            self.data_mgr.system_active = True
-            self.data_mgr.save_data()
-            return "🚀 已成功重新启用功能！"
-
-        elif sub_cmd == "group":
-            group_args = args[1:]
-            if not group_args or group_args[0].isdigit():
-                target_num = group_args[0] if group_args else None
-                if not target_num:
-                    return "⚠️ 请提供群编号数字，例如：`#op group 1`"
-                self.data_mgr.group_tags[group_id] = int(target_num)
-                self.data_mgr.save_data()
-                return f"✅ 已成功将当前群标记为：【群 {target_num}】！"
-
-            action = group_args[0].lower()
-            if action == "list":
-                lines = [f"- 群 {num}: {gid}" for gid, num in sorted(self.data_mgr.group_tags.items(), key=lambda x: x[1])]
-                return "📋 【群编号绑定列表】\n" + ("\n".join(lines) if lines else "暂无")
-            elif action == "get":
-                return f"📌 当前群已被标记为：【群 {self.data_mgr.group_tags.get(group_id, '未绑定')}】"
-
-        elif sub_cmd == "add":
-            mentions = getattr(raw_message, "mentions", [])
-            target_id = (getattr(mentions[0], "member_openid", None) or getattr(mentions[0], "id", None)) if mentions else (args[1].strip() if len(args) > 1 else None)
-            if not target_id: return "⚠️ 请 @某人 或提供 OpenID"
-            target_id = target_id.upper()
-            self.data_mgr.op_list.add(target_id)
-            self.data_mgr.save_data()
-            return f"✅ 用户 [{target_id[:6]}...] 已提权为 OP。"
-
-        elif sub_cmd in ["remove", "del", "rm"]:
-            mentions = getattr(raw_message, "mentions", [])
-            target_id = (getattr(mentions[0], "member_openid", None) or getattr(mentions[0], "id", None)) if mentions else (args[1].strip() if len(args) > 1 else None)
-            if not target_id or target_id.upper() == DataManager.DEFAULT_OP:
-                return "❌ 操作受限或未识别到有效目标"
-            target_id = target_id.upper()
-            if target_id in self.data_mgr.op_list:
-                self.data_mgr.op_list.remove(target_id)
-                self.data_mgr.save_data()
-                return f"🗑️ 已取消用户 [{target_id[:6]}...] 的 OP 权限。"
-            return "ℹ️ 该用户不是 OP。"
-
-        return "⚠️ 未知的 OP 命令。可使用 `#op help` 查看帮助。"
-
-
-    async def process_command(self, content: str, sender_openid: str, raw_message: GroupMessage, group_id: str) -> str:
-        parts = content[1:].strip().split()
-        cmd = parts[0].lower() if parts else ""
-
-        # 仅由 main.py 直接响应的核心/运维指令
-        if cmd == "op":
-            return self.handle_op_command(parts[1:], sender_openid, raw_message, group_id)
-        if cmd == "ping":
-            return f"Pong! 机器人正常运行中 ⚡\n当前服务状态：{'正常开启' if self.data_mgr.system_active else '暂停维护中'}"
-
-        # 维护状态下，直接返回 None，完全不回复其他任何消息
-        if not self.data_mgr.system_active:
-            return None
-
-        # 其余所有指令（包括未知指令/帮助指令）统一移交 game_sys 处理
-        return self.game_sys.handle_command(cmd, parts, sender_openid)
-
-    async def _handle_group_msg(self, message: GroupMessage, event_name: str):
-        content = getattr(message, "content", "").strip()
-        group_id = getattr(message, "group_openid", "")
-        msg_id = getattr(message, "id", "")
-        author = getattr(message, "author", None)
-        sender_openid = getattr(author, "member_openid", "未知用户") if author else "未知用户"
-        sender_openid = sender_openid.upper()
-
-        _log.info(f"[{event_name}] 群消息 | 群ID: {group_id} | 发送者: {sender_openid} | 内容: {content}")
-
-        if content.startswith("#"):
-            reply_text = await self.process_command(content, sender_openid, message, group_id)
-            if reply_text:  # 仅在有返回文字时才进行消息发送
-                try:
-                    await self.api.post_group_message(group_openid=group_id, msg_type=0, msg_id=msg_id, content=reply_text)
-                except Exception as e:
-                    _log.error(f"指令回复失败: {e}")
-
-    async def on_group_at_message_create(self, message: GroupMessage):
-        await self._handle_group_msg(message, "on_group_at_message_create")
-
-    async def on_group_message_create(self, message: GroupMessage):
-        await self._handle_group_msg(message, "on_group_message_create")
+  async def on_group_message_create(self, message: GroupMessage):
+    await self._handle_group_msg(message, "on_group_message_create")
 
 
 if __name__ == "__main__":
-    intents = botpy.Intents(public_messages=True)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+  intents = botpy.Intents(public_messages=True)
+  loop = asyncio.new_event_loop()
+  asyncio.set_event_loop(loop)
 
-    client = MyClient(intents=intents)
-    client.run(appid=APP_ID, secret=APP_SECRET)
+  client = MyClient(intents=intents)
+  client.run(appid=APP_ID, secret=APP_SECRET)
