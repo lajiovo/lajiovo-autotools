@@ -14,7 +14,7 @@ from opcmd import handle_op_command
 from server import start_http_servers
 
 # ------------------- 文件配置区 -------------------
-TARGET_BOT_PREFIX = "<@9178133287EC992B7389C79EEDD2261>"
+TARGET_BOT_PREFIX = "<@917813B3287EC992B7389C79EEDD2261>"
 # --------------------------------------------------
 
 apply_sdk_patch()
@@ -289,7 +289,7 @@ class MyClient(botpy.Client):
       sender_openid: str,
       raw_message: GroupMessage,
       group_id: str,
-  ) -> str:
+  ):
     return handle_op_command(self, args, sender_openid, raw_message, group_id)
 
   async def process_command(
@@ -433,11 +433,46 @@ class MyClient(botpy.Client):
         _log.error(f"测试指令异常: {e}\n{traceback.format_exc()}")
         return err_msg
 
-    # #op 指令直接返回普通字符串消息
+    # #op 指令分发与动态消息类型处理
     if cmd == "op":
-      return self.handle_op_command(
+      op_res = self.handle_op_command(
           parts[1:], sender_openid, raw_message, group_id
       )
+      if isinstance(op_res, dict):
+        msg_type = op_res.get("msg_type", 0)
+        if msg_type == 2:
+          await self.send_group_markdown_by_content(
+              group_openid=group_id,
+              content=op_res.get("content", ""),
+              msg_id=raw_message.id,
+              keyboard=op_res.get("keyboard"),
+          )
+        elif msg_type == 7:
+          await self.send_group_image(
+              group_openid=group_id,
+              file_path_or_url=op_res.get("url") or op_res.get("file_path"),
+              content=op_res.get("content", ""),
+              msg_id=raw_message.id,
+          )
+        elif msg_type == 8:
+          card = op_res.get("card", {})
+          card_content = card.get("content", {})
+          await self.send_group_card(
+              group_openid=group_id,
+              title=card_content.get("title", ""),
+              desc=card_content.get("description", ""),
+              pic_url=card_content.get("pic_url", ""),
+              jump_url=card_content.get("url", ""),
+              msg_id=raw_message.id,
+          )
+        else:
+          await self.send_group_text(
+              group_openid=group_id,
+              content=op_res.get("content", ""),
+              msg_id=raw_message.id,
+          )
+        return None
+      return op_res
 
     if cmd == "ping":
       elapsed_seconds = int(time.time() - self.start_time)
