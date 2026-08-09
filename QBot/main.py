@@ -13,6 +13,10 @@ from game import GameSystem
 from opcmd import handle_op_command
 from server import start_http_servers
 
+# ------------------- 文件配置区 -------------------
+TARGET_BOT_PREFIX = "<@9178133287EC992B7389C79EEDD2261>"
+# --------------------------------------------------
+
 apply_sdk_patch()
 
 
@@ -521,6 +525,13 @@ class MyClient(botpy.Client):
         f"[{event_name}] 群消息 | 群ID: {group_id} | 发送者: {sender_openid} |"
         f" 内容: {content}"
     )
+
+    # 如果消息开头为 TARGET_BOT_PREFIX
+    if content.startswith(TARGET_BOT_PREFIX):
+      # 1. 剥离掉 TARGET_BOT_PREFIX 前缀
+      content = content[len(TARGET_BOT_PREFIX) :].strip()
+      # 2. 删除后续开头的**所有** '#' 字符，然后统一在最前面添加一个 '#'
+      content = "#" + content.lstrip("#").strip()
 
     if content.startswith("#"):
       reply_text = await self.process_command(
