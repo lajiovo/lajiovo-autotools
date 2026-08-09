@@ -1,6 +1,8 @@
 import zPerseusLogger
 import os
 import sys
+import datetime
+import re
 import json
 import time
 import ctypes
@@ -23,7 +25,7 @@ LISTEN_PORT = 25566
 
 # QBot 相关配置
 PYTHONW_PATH = r"\Programs\Python\Python314\pythonw.exe"
-QBOT_SCRIPT_PATH = r"\QBot\main.py"
+QBOT_SCRIPT_PATH = r"Perseus\QBot\main.py"
 # 专用的精准识别标记（写在命令行参数中）
 QBOT_IDENTIFIER = "--PERSEUS_QBOT_INSTANCE"
 
@@ -33,7 +35,7 @@ timer_thread = None
 timer_event = threading.Event()  # 用于优雅控制和停止定时器线程
 
 # 2. 新增 MusicDL 相关配置与全局变量
-MUSIC_EXE_PATH = r"\musicdl\music-dl-desktop-rust.exe"
+MUSIC_EXE_PATH = r"music-dl-desktop-rust.exe"
 MUSIC_PORT = 37777
 musicdl_thread = None
 # 2. 全局线程控制对象增加 ffm_thread
@@ -341,9 +343,36 @@ def start_alas_mumu_check_timer():
             try:
                 print("⏰ 触发定时任务: 正在运行 alas_mumu_check...")
                 run_alas_mumu_check()
+                # 1. 运行前检查签到记录文件
+                log_path = 'last_checkin.txt'
+                today_str = datetime.date.today().isoformat()  # YYYY-MM-DD
+
+                # 如果文件不存在，新建空文件
+                if not os.path.exists(log_path):
+                    with open(log_path, 'w', encoding='utf-8') as f:
+                        pass
+                    last_date = ''
+                else:
+                    with open(log_path, 'r', encoding='utf-8') as f:
+                        last_date = f.read().strip()
+
+                # 如果记录的时间是今天，直接跳过任务并返回 True
+                if last_date == today_str:
+                    print("今日已重启过qbot")
+                else:
+                    try:
+                        print("今日尚未重启过qbot")
+                        start_qbot_process()
+                    except Exception as e :
+                        print(e)
+                    
                 zPGRJZ.run(headless=True)
+                with open(log_path, 'w', encoding='utf-8') as f:
+                    f.write(today_str)
+                print("已更新今日签到记录文件。")
             except Exception as e:
                 print(f"⚠️ 定时运行 alas_mumu_check 出现异常: {e}")
+                PerseusErrorMsg("定时运行 alas_mumu_check 出现异常",str(e))
 
     timer_thread = threading.Thread(target=timer_loop, daemon=True)
     timer_thread.start()
@@ -432,6 +461,7 @@ def receive_push():
 def handle_stop():
     """接收 /stop 请求，进入待机状态"""
     enter_standby()
+    PerseusNotifyMsg(str({"status": "ok", "message": "服务已进入待机状态"}),"")
     return format_response({"status": "ok", "message": "服务已进入待机状态"}, 200)
 
 @app.route("/start", methods=["GET", "POST"])
@@ -447,12 +477,14 @@ def handle_start():
         print(f"⚠️ 运行 run_alas_mumu_check 出现异常: {e}")
         
     start_alas_mumu_check_timer()
+    PerseusNotifyMsg(str({"status": "ok", "message": "服务已重新启动并恢复处理"}),"")
     return format_response({"status": "ok", "message": "服务已重新启动并恢复处理"}, 200)
 
 @app.route("/shutdown", methods=["GET", "POST"])
 def handle_shutdown():
     """接收 /shutdown 请求，结束定时检查和自身进程"""
     print("🛑 收到 /shutdown 请求，正在关闭服务自身...")
+    PerseusNotifyMsg("🛑 收到 /shutdown 请求，正在关闭服务自身...","")
     stop_timer()
     
     def delayed_exit():
@@ -528,6 +560,7 @@ def handle_run():
     print("========================================\n")
 
     run_result = handlerun(req_data)
+    PerseusNotifyMsg(str(run_result),"")
     return format_response(run_result, 200)
 
 # 4. 新增路由响应接口
@@ -538,12 +571,20 @@ def handle_music_start():
     """接收 /music/start 请求：启动程序、20s内寻找并隐藏窗口，运行 zMusicDL.main()"""
     try:
         start_musicdl_services()
+        PerseusNotifyMsg(str({
+            "status": "ok",
+            "message": "MusicDL 已启动，正在轮询隐藏 Webview 窗口并拉起主逻辑"
+        }),"")
         return format_response({
             "status": "ok",
             "message": "MusicDL 已启动，正在轮询隐藏 Webview 窗口并拉起主逻辑"
         }, 200)
     except Exception as e:
         print(f"❌ MusicDL 启动失败: {e}")
+        PerseusErrorMsg(str({
+            "status": "error",
+            "message": f"MusicDL 启动失败: {str(e)}"
+        }),"")
         return format_response({
             "status": "error",
             "message": f"MusicDL 启动失败: {str(e)}"
