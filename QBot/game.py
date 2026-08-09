@@ -1,55 +1,44 @@
+import os
+import json
 import random
 import datetime
 import hashlib
+import itertools
 
 class GameSystem:
-    RARITY_ORDER = {"海上传奇": 1, "SSR": 2, "SR": 3, "R": 4, "N": 5}
-    RARITY_TAGS = {"N": "`N`", "R": "`R`", "SR": "`SR`", "SSR": "**SSR**", "海上传奇": "**✨UR✨**"}
-
-    SHIP_RARITY_MAP = {
-        "小天鹅": ("N", 20), "利安得": ("N", 20), "奥马哈": ("N", 20), "卡辛": ("N", 20), "唐斯": ("N", 20), "罗利": ("N", 20),
-        "拉菲": ("R", 80), "绫波": ("R", 80), "标枪": ("R", 80), "菲尼克斯": ("R", 80), "波特兰": ("R", 80), "宾夕法尼亚": ("R", 80),
-        "海伦娜": ("SR", 300), "独角兽": ("SR", 300), "克利夫兰": ("SR", 300), "海伦娜·META": ("SR", 300), "雪风": ("SR", 300), "天狼星": ("SR", 300),
-        "企业": ("SSR", 1000), "胡德": ("SSR", 1000), "赤城": ("SSR", 1000), "俾斯麦": ("SSR", 1000), "阿芙乐尔": ("SSR", 1000), "四万十": ("SSR", 1000), "提尔皮茨": ("SSR", 1000), "英仙座": ("SSR", 1000), "科本斯": ("SSR", 1000),
-        "信浓": ("海上传奇", 5000), "新泽西": ("海上传奇", 5000), "武藏": ("海上传奇", 5000), "Z52": ("海上传奇", 5000), "马耳他": ("海上传奇", 5000), "纳希莫夫海军上阵": ("海上传奇", 5000), "阿尔萨斯": ("海上传奇", 5000), "莫加多尔": ("海上传奇", 5000), "拉斐尔": ("海上传奇", 5000), "金狮": ("海上传奇", 5000), "瓦尔帕莱索": ("海上传奇", 5000)
-    }
-
-    FISHING_POOL = [
-        ("junk", "破旧的破鞋", 20, 1, 1, 0.2, 0.8), ("junk", "缠人的水草", 20, 1, 1, 0.1, 0.5),
-        ("fish", "小鲫鱼", 25, 20, 10, 0.3, 1.2), ("fish", "大鲤鱼", 15, 50, 25, 1.5, 4.5),
-        ("fish", "肥美的大鲢鱼", 10, 80, 40, 3.0, 8.0), ("fish", "金光闪闪的金鱼", 5, 160, 80, 0.2, 0.6),
-        ("legend", "深海大白鲨", 3, 400, 200, 150.0, 400.0), ("box", "沉没的神秘宝箱", 2, 700, 300, 5.0, 10.0)
-    ]
-
-    SALVAGE_POOL = [
-        ("N", "小天鹅", 10, 50, 25, "指挥官，今天也要加油哦！"), ("N", "利安得", 10, 50, 25, "请多关照，指挥官。"),
-        ("N", "奥马哈", 10, 50, 25, "好嘞！今天去哪里巡逻呢？"), ("N", "卡辛", 10, 50, 25, "哈啊……好想一直在宅在家里啊……"),
-        ("N", "唐斯", 10, 50, 25, "要来一场痛快的大爆炸吗！"), ("N", "罗利", 10, 50, 25, "学习和战斗，我都会努力的！"),
-        ("R", "拉菲", 4, 120, 60, "拉菲……好困……指挥官，要一起睡觉吗？"), ("R", "绫波", 4, 120, 60, "鬼神绫波，参上……desu。"),
-        ("R", "标枪", 4, 120, 60, "标枪，充满活力地登场！"), ("R", "菲尼克斯", 4, 120, 60, "不死鸟的火力，可别小看了！"),
-        ("R", "波特兰", 4, 120, 60, "印第酱今天也是天下第一可爱！"), ("R", "宾夕法尼亚", 4, 120, 60, "准备好迎接粉碎性的打击了吗？"),
-        ("SR", "海伦娜", 2, 300, 150, "SG雷达已锁定……指挥官，请指示。"), ("SR", "独角兽", 2, 300, 150, "哥哥……优酱说想和你玩！"),
-        ("SR", "克利夫兰", 2, 300, 150, "嘿！我是克利夫兰，叫我克利夫兄贵也行哦！"), ("SR", "海伦娜·META", 2, 300, 150, "过去的一切早已沉寂，现在由我来接管战斗。"),
-        ("SR", "雪风", 2, 300, 150, "雪风大人的运势可是无敌的 nanoda！"), ("SR", "天狼星", 2, 300, 150, "请尽情使用我这把做功不纯的剑吧，我的骄傲。"),
-        ("SSR", "企业", 0.4, 600, 300, "Enterprise, engage! 叫我企业就好。"), ("SSR", "胡德", 0.4, 600, 300, "优雅，是作为皇家淑女的第一要义。"),
-        ("SSR", "赤城", 0.4, 700, 350, "啊啊……指挥官大人的味道……好想把你锁进仓库里……"), ("SSR", "俾斯麦", 0.4, 600, 300, "为了铁血的荣光！"),
-        ("SSR", "阿芙乐尔", 0.3, 600, 300, "愿曙光照亮我们的航道。"), ("SSR", "四万十", 0.4, 600, 300, "龙神大人庇佑着这片海域呢~"),
-        ("SSR", "提尔皮茨", 0.4, 600, 300, "寂寞的北方女王……今天也为你而战。"), ("SSR", "英仙座", 0.4, 600, 300, "治愈的羽翼，随时为你张开。"),
-        ("SSR", "科本斯", 0.4, 600, 300, "黑翼之鸟，降临于此！"),
-        ("海上传奇", "信浓", 0.05, 1500, 800, "妾身……乃信浓……梦境与现实的边界，皆由你决断……"), ("海上传奇", "新泽西", 0.05, 1500, 800, "Honey~ 最大的黑龙——新泽西打捞成功！惊喜吗？"),
-        ("海上传奇", "武藏", 0.05, 1500, 800, "吾乃武藏。指挥官，尽情依靠吾吧。"), ("海上传奇", "Z52", 0.05, 1500, 800, "最新锐的驱逐技术，可不是开玩笑的！"),
-        ("海上传奇", "马耳他", 0.05, 1500, 800, "日不落的空中堡垒，马耳他向您报到。"), ("海上传奇", "纳希莫夫海军上阵", 0.05, 1500, 800, "极地的寒冰与烈火，将吞噬一切敌人。"),
-        ("海上传奇", "阿尔萨斯", 0.05, 1500, 800, "守护荣光与圣裁，阿尔萨斯参上！"), ("海上传奇", "莫加多尔", 0.05, 1500, 800, "嘿嘿……想要看我疯狂的一面吗？"),
-        ("海上传奇", "拉斐尔", 0.05, 1500, 800, "大天使的祝福，赐予有准备的灵魂。"), ("海上传奇", "金狮", 0.025, 1500, 800, "皇家荷兰的咆哮，在战场上震慑四方！"),
-        ("海上传奇", "瓦尔帕莱索", 0.025, 1500, 800, "跨越风暴的海上要塞，在此展现真正的姿态！")
-    ]
-
     def __init__(self, data_manager):
         self.data_mgr = data_manager
+        
+        # 1. 动态加载配置文件
+        self.config_path = os.path.join(os.path.dirname(__file__), "gameconfig.json")
+        self.load_config()
+
+        # 2. 运行时缓存与游戏会话
         self.common_pool = []
         self._refill_common_pool()
         self.guess_game_sessions = {}
         self.blackjack_sessions = {}
+        self.bomb_sessions = {}
+        self.point24_sessions = {}
+
+    def load_config(self):
+        """读取外部 JSON 配置文件"""
+        if not os.path.exists(self.config_path):
+            raise FileNotFoundError(f"❌ 未找到配置文件：{self.config_path}，请确保 gameconfig.json 存在于同目录下。")
+
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+
+        self.RARITY_ORDER = cfg.get("rarity_order", {})
+        self.RARITY_TAGS = cfg.get("rarity_tags", {})
+        self.SHIP_RARITY_MAP = cfg.get("ship_rarity_map", {})
+        self.FISHING_POOL = cfg.get("fishing_pool", [])
+        self.SALVAGE_POOL = cfg.get("salvage_pool", [])
+        self.DUEL_EVENTS = cfg.get("duel_events", [
+            "发起了一轮猛烈开火！",
+            "巧妙地闪避了所有炮火！",
+            "呼叫舰载机完成了空袭！"
+        ])
 
     def _generate_one_ship(self):
         ships, weights = zip(*[((s[0], s[1], s[3], s[4], s[5]), s[2]) for s in self.SALVAGE_POOL])
@@ -75,6 +64,8 @@ class GameSystem:
         for row_idx, row in enumerate(raw_buttons):
             buttons = []
             for btn_idx, btn in enumerate(row):
+                # 确保按钮发送的指令中绝无 @ 符号
+                clean_data = str(btn.get("data", "")).replace("@", "").strip()
                 buttons.append({
                     "id": f"btn_{row_idx}_{btn_idx}",
                     "render_data": {
@@ -83,9 +74,9 @@ class GameSystem:
                         "style": 1  # 默认蓝色高亮样式
                     },
                     "action": {
-                        "type": 2,  # 设置输入框内容并直接发送
-                        "permission": {"type": 2},  # 所有人均可使用
-                        "data": btn.get("data", "")
+                        "type": 2,  # 点击后自动发送文本
+                        "permission": {"type": 2},  # 所有人可用
+                        "data": clean_data
                     }
                 })
             rows.append({"buttons": buttons})
@@ -94,7 +85,6 @@ class GameSystem:
 
     @classmethod
     def _msg(cls, content: str, buttons: list = None) -> dict:
-        """msg_type = 2: Markdown + Keyboard"""
         res = {
             "msg_type": 2,
             "content": content
@@ -103,34 +93,7 @@ class GameSystem:
             res["keyboard"] = cls._build_qq_keyboard(buttons)
         return res
 
-    @staticmethod
-    def _img_msg(url_or_path: str, content: str = "") -> dict:
-        """msg_type = 7: 富媒体 / 图片"""
-        return {
-            "msg_type": 7,
-            "url": url_or_path,
-            "file_path": url_or_path,
-            "content": content
-        }
-
-    @staticmethod
-    def _card_msg(title: str, description: str, pic_url: str = "", jump_url: str = "") -> dict:
-        """msg_type = 8: 卡片消息"""
-        return {
-            "msg_type": 8,
-            "card": {
-                "content": {
-                    "title": title,
-                    "description": description,
-                    "pic_url": pic_url,
-                    "url": jump_url
-                }
-            }
-        }
-    # =======================================================================
-
-    @staticmethod
-    def calculate_level(exp: int) -> int:
+    def calculate_level(self, exp: int) -> int:
         return 1 if exp <= 0 else int((exp / 100) ** 0.5) + 1
 
     def calculate_user_power(self, dock: dict) -> int:
@@ -154,27 +117,51 @@ class GameSystem:
         else: luck = "🗿 **纯血非酋**"
         return f"{luck} *(实际 {actual} 艘 / 期望 {expected:.1f} 艘)*"
 
+    def _get_user_data(self, sender_openid: str):
+        return self.data_mgr.user_stats.setdefault(sender_openid, {
+            "name": f"指挥官_{sender_openid[:4]}", "coins": 100, "exp": 0,
+            "counts": 0, "salvage_counts": 0, "attack_counts": 0,
+            "fish_bag": {}, "dock": {}
+        })
+
+    # ==================== 指令分发中心 ====================
     def handle_command(self, cmd: str, parts: list, sender_openid: str) -> dict:
         arg = parts[1] if len(parts) > 1 else ""
 
-        # 默认底栏导航按钮
+        # 默认无 @ 干净键盘
         default_btns = [
-            [{"label": "⚓ 单抽打捞", "data": "#打捞"}, {"label": "🚀 十连打捞", "data": "#打捞 10"}],
-            [{"label": "🎣 去钓鱼", "data": "#钓鱼"}, {"label": "🎒 查资产", "data": "#船坞"}, {"label": "🔮 算运势", "data": "#运势"}],
-            [{"label": "🏆 排行榜", "data": "#排行榜"}, {"label": "🎰 老虎机", "data": "#老虎机"}]
+            [{"label": "⚓ 单抽打捞", "data": "#打捞"}, {"label": "🚀 十连打捞", "data": "#打捞 10"}, {"label": "🎣 挥竿钓鱼", "data": "#钓鱼"}],
+            [{"label": "🎒 查看船坞", "data": "#船坞"}, {"label": "🔮 今日运势", "data": "#运势"}, {"label": "🏆 战力排行", "data": "#排行榜"}],
+            [{"label": "🎮 娱乐小游戏", "data": "#游戏菜单"}]
         ]
 
-        if cmd in ["帮助", "help"]:
+        if cmd in ["帮助", "help", "菜单"]:
             help_md = (
-                "### 🤖 指令交互中心\n"
-                "> 点击下方按钮或直接发送对应指令即可参与交互：\n\n"
-                "* **基础功能**：`#打捞` | `#出击@某人` | `#钓鱼` | `#船坞` | `#运势`\n"
-                "* **小游戏区**：`#猜数字` | `#21点` | `#猜拳` | `#老虎机` | `#赛跑`"
+                "### 🤖 港区交互指挥中心\n"
+                "> 点击下方按钮或输入相应指令即可交互：\n\n"
+                "* **⚓ 舰队养成**：`#打捞` | `#出击` | `#钓鱼` | `#船坞` | `#改名 新名字`\n"
+                "* **🎲 游艺广场**：`#游戏菜单`（含炸弹人、21点、决斗、24点等）\n"
+                "* **📊 数据查询**：`#运势` | `#排行榜` | `#时间`"
             )
             return self._msg(help_md, default_btns)
 
+        if cmd in ["游戏菜单", "小游戏"]:
+            game_md = (
+                "### 🎮 游艺广场小游戏合集\n"
+                "选择你想要挑战的小游戏："
+            )
+            game_menu_btns = [
+                [{"label": "💣 拆弹专家", "data": "#炸弹人"}, {"label": "⚔️ 舰队决斗", "data": "#决斗"}],
+                [{"label": "🧮 算术24点", "data": "#24点"}, {"label": "🎰 极速拉霸", "data": "#老虎机"}],
+                [{"label": "♠️ 21点扑克", "data": "#21点"}, {"label": "🔢 猜数字", "data": "#猜数字"}],
+                [{"label": "✌️ 猜拳对决", "data": "#猜拳"}, {"label": "🏃 舰船赛跑", "data": "#赛跑"}],
+                [{"label": "🔙 返回主菜单", "data": "#帮助"}]
+            ]
+            return self._msg(game_md, game_menu_btns)
+
         cmd_map = {
-            "name": lambda: self.set_user_name(sender_openid, " ".join(parts[1:]).strip()) if len(parts) > 1 else self._msg("⚠️ 请输入名称，例如：`#name 阿斯兰`"),
+            "name": lambda: self.set_user_name(sender_openid, " ".join(parts[1:]).strip()) if len(parts) > 1 else self._msg("⚠️ 请输入名称，例如：`#改名 阿斯兰`"),
+            "改名": lambda: self.set_user_name(sender_openid, " ".join(parts[1:]).strip()) if len(parts) > 1 else self._msg("⚠️ 请输入名称，例如：`#改名 阿斯兰`"),
             "打捞": lambda: self.play_salvage(sender_openid, count=10 if arg == "10" else 1),
             "搜救": lambda: self.play_salvage(sender_openid, count=10 if arg == "10" else 1),
             "捞船": lambda: self.play_salvage(sender_openid, count=10 if arg == "10" else 1),
@@ -185,14 +172,15 @@ class GameSystem:
             "21点": lambda: self.play_blackjack(sender_openid, arg),
             "blackjack": lambda: self.play_blackjack(sender_openid, arg),
             "猜拳": lambda: self.play_rps(sender_openid, arg),
-            "石头剪刀布": lambda: self.play_rps(sender_openid, arg),
             "rps": lambda: self.play_rps(sender_openid, arg),
             "老虎机": lambda: self.play_slot_machine(sender_openid),
             "slot": lambda: self.play_slot_machine(sender_openid),
-            "拉霸": lambda: self.play_slot_machine(sender_openid),
             "赛跑": lambda: self.play_ship_race(sender_openid, arg),
             "race": lambda: self.play_ship_race(sender_openid, arg),
-            "赛船": lambda: self.play_ship_race(sender_openid, arg),
+            "炸弹人": lambda: self.play_bomb_game(sender_openid, arg),
+            "拆弹": lambda: self.play_bomb_game(sender_openid, arg),
+            "决斗": lambda: self.play_duel(sender_openid, " ".join(parts[1:]).strip()),
+            "24点": lambda: self.play_point24(sender_openid, arg),
             "船坞": lambda: self.get_user_assets(sender_openid),
             "背包": lambda: self.get_user_assets(sender_openid),
             "排行榜": lambda: self.get_rank(),
@@ -208,19 +196,13 @@ class GameSystem:
         handler = cmd_map.get(cmd)
         return handler() if handler else self._msg(f"❌ 未知指令：`#{cmd}`\n发送 `#帮助` 查看完整指令。", default_btns)
 
-    def _get_user_data(self, sender_openid: str):
-        return self.data_mgr.user_stats.setdefault(sender_openid, {
-            "name": f"指挥官_{sender_openid[:4]}", "coins": 0, "exp": 0,
-            "counts": 0, "salvage_counts": 0, "attack_counts": 0,
-            "fish_bag": {}, "dock": {}
-        })
-
     def set_user_name(self, sender_openid: str, name: str) -> dict:
         if len(name) > 12: return self._msg("❌ 名称长度不能超过 12 个字符。")
         self._get_user_data(sender_openid)["name"] = name
         self.data_mgr.save_data()
         return self._msg(f"✅ 个人名称已成功修改为：**【{name}】**！")
 
+    # ==================== 经典玩法 ====================
     def play_salvage(self, sender_openid: str, count: int = 1) -> dict:
         user_data = self._get_user_data(sender_openid)
         user_data["salvage_counts"] = user_data.get("salvage_counts", 0) + count
@@ -244,10 +226,10 @@ class GameSystem:
             elif rarity == "SSR": title = "### ✨ 金色闪耀！超稀有舰船回应！ ✨"
             
             md = (f"{title}\n"
-                  f"* **获得舰船**：[{self.RARITY_TAGS[rarity]}] **{ship_name}**\n"
+                  f"* **获得舰船**：[{self.RARITY_TAGS.get(rarity, rarity)}] **{ship_name}**\n"
                   f"* **台词**：“*{quote}*”\n"
                   f"> 💰 **收益**：金币 `+{total_coins}` | 经验 `+{total_exp}`\n"
-                  f"> 📊 **资产**：金币 `{user_data['coins']}` | 经验 `{user_data['exp']}`")
+                  f"> 📊 **当前**：金币 `{user_data['coins']}` | 经验 `{user_data['exp']}`")
             return self._msg(md, btns)
 
         has_ur = any(s[0] == "海上传奇" for s in drawn)
@@ -255,7 +237,7 @@ class GameSystem:
         header = "### 🌟🌈 十连彩光！！海上传奇降临！" if has_ur else ("### ✨🟡 十连金光！获得超稀有舰船！" if has_ssr else "### ⚓ 十连打捞报告")
 
         ship_lines = [
-            f"* [{self.RARITY_TAGS[s[0]]}] **{s[1]}**" + (f"\n  > “*{s[4]}*”" if s[0] in ["SSR", "海上传奇"] else "")
+            f"* [{self.RARITY_TAGS.get(s[0], s[0])}] **{s[1]}**" + (f"\n  > “*{s[4]}*”" if s[0] in ["SSR", "海上传奇"] else "")
             for s in drawn
         ]
         md = f"{header}\n\n" + "\n".join(ship_lines) + f"\n\n> 💰 **总收益**：金币 `+{total_coins}` | 经验 `+{total_exp}`\n> 📊 **当前总计**：金币 `{user_data['coins']}` | 经验 `{user_data['exp']}`"
@@ -272,7 +254,9 @@ class GameSystem:
         if target_data:
             target_name, target_power = target_data.get("name", "未知目标"), self.calculate_user_power(target_data.get("dock", {}))
         else:
-            target_name, target_power = clean_target or "神秘黑飞跃舰队", max(100, int(my_power * random.uniform(0.8, 1.2)))
+            target_name, target_power = clean_target or "深海塞壬巡逻队", max(100, int(my_power * random.uniform(0.8, 1.2)))
+
+        btns = [[{"label": "⚔️ 再次出击", "data": "#出击"}, {"label": "🏆 排行榜", "data": "#排行榜"}]]
 
         if my_power >= target_power:
             chosen = random.choice([s for s in self.SALVAGE_POOL if s[0] in ["N", "R", "SR"]])
@@ -294,7 +278,7 @@ class GameSystem:
                   f"* **对阵双方**：`{user_data['name']}` ({my_power} PT) **VS** `{target_name}` ({target_power} PT)\n"
                   f"* **战果**：😭 **战力不敌惨遭击退！**\n"
                   f"> 💸 **损失**：遗失了 `{lost}` 金币 *(剩余 `{user_data['coins']}`)*")
-        return self._msg(md)
+        return self._msg(md, btns)
 
     def play_fishing(self, sender_openid: str) -> dict:
         user_data = self._get_user_data(sender_openid)
@@ -322,9 +306,166 @@ class GameSystem:
         md = (f"{prefix}\n"
               f"* **结果**：{detail}\n"
               f"> 💰 **收益**：金币 `+{coins}` | 经验 `+{exp}` *(当前金币: `{user_data['coins']}`)*")
-        btns = [[{"label": "🎣 再次挥竿", "data": "#钓鱼"}, {"label": "🐟 查看鱼库", "data": "#背包"}]]
+        btns = [[{"label": "🎣 再次挥竿", "data": "#钓鱼"}, {"label": "🐟 查看背包", "data": "#背包"}]]
         return self._msg(md, btns)
 
+    # ==================== 新增小游戏区 ====================
+    
+    # --- 小游戏 1：💣 拆弹专家 (扫雷式剪线) ---
+    def play_bomb_game(self, sender_openid: str, wire: str) -> dict:
+        user_data = self._get_user_data(sender_openid)
+        session = self.bomb_sessions.get(sender_openid)
+
+        if not session or wire == "重置":
+            # 随机生成 5 条线，1 条引爆线
+            bomb_wire = random.randint(1, 5)
+            self.bomb_sessions[sender_openid] = {"bomb": bomb_wire, "safe": 0}
+            md = (f"### 💣 拆弹专家小游戏\n"
+                  f"面前有一枚定时炸弹，共有 **5 条引线** (1-5)。\n"
+                  f"其中只有 **1 条会引爆**！每剪断一条安全线即可获得累积奖励。\n"
+                  f"点击下方按钮选择你要剪断的引线：")
+            btns = [[{"label": f"✂️ 剪 {i} 号线", "data": f"#拆弹 {i}"} for i in range(1, 6)]]
+            return self._msg(md, btns)
+
+        if not wire.isdigit() or int(wire) not in range(1, 6):
+            btns = [[{"label": f"✂️ 剪 {i} 号线", "data": f"#拆弹 {i}"} for i in range(1, 6)]]
+            return self._msg("⚠️ 请选择正确的引线编号 (1-5)！", btns)
+
+        chosen = int(wire)
+        if chosen == session["bomb"]:
+            del self.bomb_sessions[sender_openid]
+            loss = random.randint(80, 200)
+            user_data["coins"] = max(0, user_data["coins"] - loss)
+            self.data_mgr.save_data()
+            btns = [[{"label": "💣 再试一次", "data": "#拆弹 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
+            return self._msg(f"### 💥 BOOM！引爆了炸弹！\n你剪断了 **{chosen}号线**，不幸触发了爆炸！\n> 💸 **损失**：扣除金币 `{loss}` *(剩余 `{user_data['coins']}`)*", btns)
+
+        session["safe"] += 1
+        safe_count = session["safe"]
+
+        if safe_count >= 4:
+            del self.bomb_sessions[sender_openid]
+            coins, exp = 600, 250
+            user_data["coins"] += coins
+            user_data["exp"] += exp
+            self.data_mgr.save_data()
+            btns = [[{"label": "💣 再玩一局", "data": "#拆弹 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
+            return self._msg(f"### 🎉 完美拆除！全场安全！\n你成功剪断了所有 safe 引线，完美避开炸弹！\n> 💰 **通关大奖**：金币 `+{coins}` | 经验 `+{exp}`", btns)
+
+        reward_coins = safe_count * 100
+        btns = [[{"label": f"✂️ 剪 {i} 号线", "data": f"#拆弹 {i}"} for i in range(1, 6) if i != chosen]]
+        return self._msg(f"✨ **咔哒！{chosen}号线安全！**\n当前已成功剪断 `{safe_count}` 条线，奖金池累积：`{reward_coins}` 金币！\n请继续选择下一条引线：", btns)
+
+    # --- 小游戏 2：⚔️ 舰队决斗 ---
+    def play_duel(self, sender_openid: str, target_str: str) -> dict:
+        user_data = self._get_user_data(sender_openid)
+        my_power = self.calculate_user_power(user_data["dock"])
+
+        clean_target = target_str.replace("@", "").strip()
+        target_data = next((ud for uid, ud in self.data_mgr.user_stats.items() if uid != sender_openid and (clean_target in ud.get("name", "") or clean_target in uid)), None)
+
+        if target_data:
+            target_name, target_power = target_data.get("name", "对方"), self.calculate_user_power(target_data.get("dock", {}))
+        else:
+            target_name, target_power = clean_target or "虚拟训练假人", random.randint(max(50, my_power - 200), my_power + 200)
+
+        p1_hp, p2_hp = 100, 100
+        logs = []
+
+        while p1_hp > 0 and p2_hp > 0:
+            # 玩家 1 攻击
+            dmg1 = int(random.randint(15, 35) * (my_power / max(1, target_power)) ** 0.3)
+            p2_hp -= dmg1
+            event1 = random.choice(self.DUEL_EVENTS)
+            logs.append(f"⚔️ **{user_data['name']}** {event1} *(造成 {dmg1} 点伤害)*")
+            if p2_hp <= 0: break
+
+            # 玩家 2 攻击
+            dmg2 = int(random.randint(15, 35) * (target_power / max(1, my_power)) ** 0.3)
+            p1_hp -= dmg2
+            event2 = random.choice(self.DUEL_EVENTS)
+            logs.append(f"🛡️ **{target_name}** {event2} *(造成 {dmg2} 点伤害)*")
+
+        btns = [[{"label": "⚔️ 再决斗一次", "data": "#决斗"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
+
+        if p1_hp > 0:
+            coins, exp = random.randint(150, 300), random.randint(50, 120)
+            user_data["coins"] += coins
+            user_data["exp"] += exp
+            self.data_mgr.save_data()
+            md = (f"### 🏆 决斗胜利！\n"
+                  f"**【{user_data['name']}】** VS **【{target_name}】**\n\n" +
+                  "\n".join(logs[-4:]) +
+                  f"\n\n🎉 **最终获胜者**：**{user_data['name']}**！\n"
+                  f"> 💰 **奖励**：金币 `+{coins}` | 经验 `+{exp}`")
+        else:
+            loss = random.randint(50, 100)
+            user_data["coins"] = max(0, user_data["coins"] - loss)
+            self.data_mgr.save_data()
+            md = (f"### 😭 决斗战败！\n"
+                  f"**【{user_data['name']}】** VS **【{target_name}】**\n\n" +
+                  "\n".join(logs[-4:]) +
+                  f"\n\n💀 **最终获胜者**：**{target_name}**！\n"
+                  f"> 💸 **损失**：金币 `-{loss}`")
+
+        return self._msg(md, btns)
+
+    # --- 小游戏 3：🧮 24点算术益智 ---
+    def play_point24(self, sender_openid: str, answer_expr: str) -> dict:
+        user_data = self._get_user_data(sender_openid)
+        session = self.point24_sessions.get(sender_openid)
+
+        def solve_24(nums):
+            for p in itertools.permutations(nums):
+                for ops in itertools.product(['+', '-', '*'], repeat=3):
+                    # 简化测试组合
+                    exprs = [
+                        f"(({p[0]}{ops[0]}{p[1]}){ops[1]}{p[2]}){ops[2]}{p[3]}",
+                        f"({p[0]}{ops[0]}{p[1]}){ops[1]}({p[2]}{ops[2]}{p[3]})"
+                    ]
+                    for e in exprs:
+                        try:
+                            if abs(eval(e) - 24) < 1e-5: return True
+                        except ZeroDivisionError: pass
+            return False
+
+        if not session or answer_expr == "重置":
+            # 随机抽一组必定有解的 4 个数字
+            while True:
+                nums = [random.randint(1, 10) for _ in range(4)]
+                if solve_24(nums): break
+            self.point24_sessions[sender_openid] = nums
+            md = (f"### 🧮 24点智力挑战\n"
+                  f"随机数字：`{nums[0]}` , `{nums[1]}` , `{nums[2]}` , `{nums[3]}`\n"
+                  f"> 请使用 `+ - * /` 和括号将这 4 个数字计算得出 **24**！\n"
+                  f"发送指令格式：`#24点 (a+b)*(c-d)`")
+            btns = [[{"label": "🔄 换一组数字", "data": "#24点 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
+            return self._msg(md, btns)
+
+        nums = session
+        clean_expr = answer_expr.replace(" ", "").replace("x", "*").replace("X", "*")
+
+        # 检查是否使用了正确的数字
+        for c in clean_expr:
+            if c not in "0123456789+-*/()":
+                return self._msg("❌ 输入包含非法字符！仅允许数字、`+ - * /` 和 `()` 括号。")
+
+        try:
+            val = eval(clean_expr)
+            if abs(val - 24) < 1e-5:
+                del self.point24_sessions[sender_openid]
+                coins, exp = 400, 200
+                user_data["coins"] += coins
+                user_data["exp"] += exp
+                self.data_mgr.save_data()
+                btns = [[{"label": "🧮 再来一局", "data": "#24点 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
+                return self._msg(f"### 🎉 解题正确！\n算式：`{clean_expr} = 24`\n> 💰 **聪慧奖励**：金币 `+{coins}` | 经验 `+{exp}`", btns)
+            else:
+                return self._msg(f"❌ 计算结果为 `{val}`，并不是 24 哦！再试一次吧！")
+        except Exception:
+            return self._msg("❌ 表达式格式错误，无法计算！例如：`#24点 (1+2+3)*4`")
+
+    # ==================== 其他既有小游戏优化 ====================
     def play_guess_number(self, sender_openid: str, arg: str) -> dict:
         user_data = self._get_user_data(sender_openid)
         
@@ -352,11 +493,12 @@ class GameSystem:
         user_data["exp"] += exp
         self.data_mgr.save_data()
 
+        btns = [[{"label": "🔢 再玩一次", "data": "#猜数字 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
         md = (f"### 🎉 恭喜猜中！\n"
               f"* **正确答案**：`{target}`\n"
               f"* **总共尝试**：`{attempts}` 次\n"
               f"> 💰 **奖励**：金币 `+{coins}` | 经验 `+{exp}`")
-        return self._msg(md)
+        return self._msg(md, btns)
 
     def play_blackjack(self, sender_openid: str, action: str) -> dict:
         user_data = self._get_user_data(sender_openid)
@@ -390,7 +532,8 @@ class GameSystem:
                 lost = random.randint(50, 150)
                 user_data["coins"] = max(0, user_data["coins"] - lost)
                 self.data_mgr.save_data()
-                return self._msg(f"### 💥 爆牌！\n* **最终手牌**：`{' '.join(p_cards)}` (`{p_score}`点)\n> 💸 扣除金币 `{lost}` *(当前: `{user_data['coins']}`)*")
+                btns = [[{"label": "🃏 再玩一局", "data": "#21点"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
+                return self._msg(f"### 💥 爆牌！\n* **最终手牌**：`{' '.join(p_cards)}` (`{p_score}`点)\n> 💸 扣除金币 `{lost}` *(当前: `{user_data['coins']}`)*", btns)
             
             md = f"🎴 **补牌结果**：`{' '.join(p_cards)}` *(当前点数: `{p_score}`)*"
             return self._msg(md, game_btns)
@@ -414,7 +557,7 @@ class GameSystem:
             md += f"😭 **庄家胜出！**\n> 💸 **损失**：金币 `-{lost}`"
 
         self.data_mgr.save_data()
-        return self._msg(md, [[{"label": "🎮 再来一局", "data": "#21点"}]])
+        return self._msg(md, [[{"label": "🎮 再来一局", "data": "#21点"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]])
 
     def play_rps(self, sender_openid: str, choice: str) -> dict:
         options = ["石头", "剪刀", "布"]
@@ -468,13 +611,12 @@ class GameSystem:
         user_data["exp"] += exp
         self.data_mgr.save_data()
 
-        # 注意：此处去除了可能引发 40011000 的 text 高亮关键字，采用标准纯文本区块格式
         md = (f"### 🎰 拉霸老虎机\n"
               f"```\n[ {r1} | {r2} | {r3} ]\n```\n"
               f"{tip}\n"
               f"> 💰 **结算**：金币 `+{coins}` *(门票-50)* | 经验 `+{exp}`\n"
               f"> 📊 **剩余**：`{user_data['coins']}` 金币")
-        btns = [[{"label": "🎰 再拉一次", "data": "#老虎机"}]]
+        btns = [[{"label": "🎰 再拉一次", "data": "#老虎机"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
         return self._msg(md, btns)
 
     def play_ship_race(self, sender_openid: str, choice: str) -> dict:
@@ -506,6 +648,7 @@ class GameSystem:
         md = f"### 🏁 赛船比赛结束\n**📊 比赛成绩榜**：\n{rank_str}\n\n{res}"
         return self._msg(md, race_btns)
 
+    # ==================== 查询与面板 ====================
     def get_user_assets(self, sender_openid: str) -> dict:
         user_data = self._get_user_data(sender_openid)
         dock, bag = user_data["dock"], user_data["fish_bag"]
