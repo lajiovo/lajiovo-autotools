@@ -1,8 +1,29 @@
+import os
 import subprocess
 import urllib.parse
 import urllib.request
 from botpy.message import GroupMessage
 from config import DataManager
+
+# ------------------- 预设日志路径配置 -------------------
+PRESET_LOG_PATHS = [
+    r"\AzurPilot\log",
+    r"\Perseus\logs",
+    r"\Perseus\QBot",
+]
+ALAS_ERROR_LOG_PATH = r"\AzurPilot\log\error\alas"
+
+# 用于在内存中缓存各群/用户当前的日志选择与文件读取位置 (状态记录)
+LOG_STATE_CACHE = {}
+
+
+def _sanitize_path(path_str: str) -> str:
+  """隐私脱敏处理：隐藏敏感目录名 """
+  if not path_str:
+    return ""
+  return path_str.replace(r"D:\", r"D:\***").replace(
+      "D:/", "D:/***"
+  )
 
 
 def handle_op_command(
@@ -11,8 +32,10 @@ def handle_op_command(
     sender_openid: str,
     raw_message: GroupMessage,
     group_id: str,
-) -> str:
-  is_op = sender_openid in client.data_mgr.op_list
+):
+  # 统一处理 OP 标识符格式
+  sender_openid_upper = sender_openid.upper() if sender_openid else ""
+  is_op = sender_openid_upper in client.data_mgr.op_list
 
   if not args:
     group_tag_info = (
@@ -26,9 +49,11 @@ def handle_op_command(
         else f"👋 你好呀！快去试试 #钓鱼 或 #打捞 吧！{group_tag_info}"
     )
 
-  sub_cmd = args[0].lower()
+  # 🛑 权限硬锁：非 OP 拒绝一切子命令响应，防止隐蔽攻击与隐私泄露
   if not is_op:
-    return "❌ 权限不足！只有现有的 OP 管理员才能执行 OP 管理指令。"
+    return "❌ 权限不足！只有授权的 OP 管理员才能执行此操作。"
+
+  sub_cmd = args[0].lower()
 
   # ------------------- 帮助指令 -------------------
   if sub_cmd in ["help", "?", "帮助"]:
@@ -42,8 +67,8 @@ def handle_op_command(
         "• #op restart - 重新无窗口启动 QBot (执行 sv bot/start)\n"
         "• #op shutdown - 关闭机器人程序并通知指定的通知群\n"
         "• #op list - 查看所有 OP 管理员\n"
-        "• #op add [@某人/OpenID] - 添加管理员\n"
-        "• #op del/remove [@某人/OpenID] - 移除管理员\n\n"
+        "• #op add [@某人/OpenID] - [主管理员] 添加管理员\n"
+        "• #op del/remove [@某人/OpenID] - [主管理员] 移除管理员\n\n"
         "📌 【群绑定与 通知/Push 管理】\n"
         "• #op group <数字> - 标记当前群编号 (例: #op group 1)\n"
         "• #op group list - 查看所有群编号绑定\n"
@@ -52,6 +77,12 @@ def handle_op_command(
         "• #op push set <数字> - 设置 Push 消息的目标推送群\n"
         "• #op push start - 开启 Push 转发\n"
         "• #op push stop - 关闭 Push 转发\n\n"
+        "📌 【日志查看接口 (#op log)】\n"
+        "• #op log get [num] - 选择预设目录并列出最新 5 个文件 (1~3)\n"
+        "• #op log find 4 - 查看 Alas 错误日志文件夹列表\n"
+        "• #op log page [num] - 列表翻页\n"
+        "• #op log open [num] - 打开当前列表展示的序号(如 1~5 或全局序号)\n"
+        "• #op log goto [num] - 向上翻页查看日志(支持 #op log goto 0 查看错误截图)\n\n"
         "📌 【任务运行接口 (#op run <任务>)】\n"
         "• #op run ikun - 执行 alas与mumu 双向状态检查与恢复\n"
         "• #op run alas <start/restart/kill/hide/online> - 控制 Alas 进程\n"
@@ -70,6 +101,234 @@ def handle_op_command(
         "• #op sv music/ffm - 单开线程运行音频处理任务 (ffmpeg)\n"
         "• #op sv music/stop - 停止 MusicDL 服务及清理 37777 端口"
     )
+
+  # ------------------- #op log 日志查看相关指令 -------------------
+  elif sub_cmd == "log":
+    log_args = args[1:]
+    if not log_args:
+      paths_str = "\n".join([
+          f"[{i+1}] {_sanitize_path(p)}"
+          for i, p in enumerate(PRESET_LOG_PATHS)
+      ])
+      return (
+          f"📂 【日志查看帮助】\n"
+          f"预设目录列表：\n{paths_str}\n"
+          f"[4] {_sanitize_path(ALAS_ERROR_LOG_PATH)} (Alas 错误日志目录)\n\n"
+          f"用法：\n"
+          f"• `#op log get [1-3]` : 获取指定目录的最新 5 个文件\n"
+          f"• `#op log find 4` : 特殊查找 Alas 错误日志文件夹列表\n"
+          f"• `#op log page [页码]` : 翻页查看文件/文件夹列表\n"
+          f"• `#op log open [序号]` : 打开当前列表中的指定项(默认倒数10行)\n"
+          f"• `#op log goto [页码]` : 倒着向前翻页(输入 0 可查看错误截图)"
+      )
+
+    action = log_args[0].lower()
+    state_key = f"{group_id}_{sender_openid}"
+
+    # #op log find 4 特殊处理逻辑
+    if action == "find" and len(log_args) > 1 and log_args[1] == "4":
+      target_dir = ALAS_ERROR_LOG_PATH
+      if not os.path.exists(target_dir):
+        return (
+            f"❌ 目标 Alas 错误日志路径不存在: `{_sanitize_path(target_dir)}`"
+        )
+
+      try:
+        subfolders = []
+        for entry in os.scandir(target_dir):
+          if entry.is_dir():
+            subfolders.append((entry.path, entry.stat().st_mtime))
+
+        subfolders.sort(key=lambda x: x[1], reverse=True)
+        folder_list = [f[0] for f in subfolders]
+
+        LOG_STATE_CACHE[state_key] = {
+            "mode": "folder",
+            "dir": target_dir,
+            "items": folder_list,
+            "page": 1,
+            "page_size": 5,
+            "current_file": None,
+            "image_path": None,
+            "lines": [],
+            "log_page": 1,
+        }
+
+        return _render_item_list(state_key, 1)
+      except Exception as e:
+        return f"❌ 读取错误日志目录失败: {e}"
+
+    # 1. 获取指定预设路径的文件列表 (#op log get [1-3])
+    elif action == "get":
+      path_idx = (
+          int(log_args[1]) - 1
+          if len(log_args) > 1 and log_args[1].isdigit()
+          else 0
+      )
+      if path_idx < 0 or path_idx >= len(PRESET_LOG_PATHS):
+        return f"⚠️ 预设路径序号无效，可选范围为 1 ~ {len(PRESET_LOG_PATHS)}"
+
+      target_dir = PRESET_LOG_PATHS[path_idx]
+      if not os.path.exists(target_dir):
+        return f"❌ 目标日志路径不存在: `{_sanitize_path(target_dir)}`"
+
+      try:
+        all_files = []
+        for root, _, files in os.walk(target_dir):
+          for f in files:
+            full_path = os.path.join(root, f)
+            try:
+              mtime = os.path.getmtime(full_path)
+              all_files.append((full_path, mtime))
+            except Exception:
+              pass
+
+        all_files.sort(key=lambda x: x[1], reverse=True)
+        file_list = [f[0] for f in all_files]
+
+        LOG_STATE_CACHE[state_key] = {
+            "mode": "file",
+            "dir": target_dir,
+            "items": file_list,
+            "page": 1,
+            "page_size": 5,
+            "current_file": None,
+            "image_path": None,
+            "lines": [],
+            "log_page": 1,
+        }
+
+        return _render_item_list(state_key, 1)
+      except Exception as e:
+        return f"❌ 读取日志目录失败: {e}"
+
+    # 2. 文件/文件夹列表翻页
+    elif action == "page":
+      if state_key not in LOG_STATE_CACHE:
+        return (
+            "⚠️ 请先使用 `#op log get [num]` 或 `#op log find 4` 初始化列表！"
+        )
+
+      page_num = (
+          int(log_args[1])
+          if len(log_args) > 1 and log_args[1].isdigit()
+          else LOG_STATE_CACHE[state_key]["page"] + 1
+      )
+      return _render_item_list(state_key, page_num)
+
+    # 3. 打开指定的日志文件或错误日志文件夹
+    elif action == "open":
+      if (
+          state_key not in LOG_STATE_CACHE
+          or not LOG_STATE_CACHE[state_key]["items"]
+      ):
+        return "⚠️ 当前无可用列表，请先执行 `#op log get [num]` 或 `#op log find 4`！"
+
+      state = LOG_STATE_CACHE[state_key]
+      items = state["items"]
+      mode = state.get("mode", "file")
+      current_page = state.get("page", 1)
+      page_size = state.get("page_size", 5)
+
+      input_num = (
+          int(log_args[1])
+          if len(log_args) > 1 and log_args[1].isdigit()
+          else 1
+      )
+
+      start_idx = (current_page - 1) * page_size
+      if 1 <= input_num <= page_size:
+        target_idx = start_idx + (input_num - 1)
+      else:
+        target_idx = input_num - 1
+
+      if target_idx < 0 or target_idx >= len(items):
+        return (
+            f"⚠️ 序号超出范围，当前页范围: {start_idx + 1} ~"
+            f" {min(start_idx + page_size, len(items))}，列表总计 {len(items)} 项。"
+        )
+
+      target_item = items[target_idx]
+      target_file = target_item
+      found_img = None
+
+      # 文件夹模式（#op log find 4 特殊逻辑）
+      if mode == "folder":
+        if not os.path.isdir(target_item):
+          return f"❌ 找不到对应目录: `{_sanitize_path(target_item)}`"
+
+        log_txt_path = os.path.join(target_item, "log.txt")
+        if not os.path.exists(log_txt_path):
+          txt_files = [
+              os.path.join(target_item, f)
+              for f in os.listdir(target_item)
+              if f.lower().endswith(".txt")
+          ]
+          target_file = txt_files[0] if txt_files else None
+        else:
+          target_file = log_txt_path
+
+        img_files = [
+            os.path.join(target_item, f)
+            for f in os.listdir(target_item)
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+        if img_files:
+          found_img = img_files[0]
+
+      if not target_file or not os.path.exists(target_file):
+        return (
+            f"❌ 未在该文件夹下找到可读的文本日志 (log.txt)！"
+            if mode == "folder"
+            else f"❌ 日志文件不存在: `{_sanitize_path(target_file)}`"
+        )
+
+      try:
+        try:
+          with open(target_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        except UnicodeDecodeError:
+          with open(target_file, "r", encoding="gbk", errors="ignore") as f:
+            lines = f.readlines()
+
+        state["current_file"] = target_file
+        state["image_path"] = found_img
+        state["lines"] = lines
+        state["log_page"] = 1
+
+        return _render_log_content(state_key, 1)
+      except Exception as e:
+        return f"❌ 读取日志文件失败: {e}"
+
+    # 4. 日志内容倒着翻页 & 响应 goto 0 返回图片
+    elif action == "goto":
+      if (
+          state_key not in LOG_STATE_CACHE
+          or not LOG_STATE_CACHE[state_key]["current_file"]
+      ):
+        return "⚠️ 当前未打开任何日志文件，请先使用 `#op log open [num]` 打开日志！"
+
+      goto_page = (
+          int(log_args[1])
+          if len(log_args) > 1 and log_args[1].isdigit()
+          else LOG_STATE_CACHE[state_key]["log_page"] + 1
+      )
+
+      if goto_page == 0:
+        img_path = LOG_STATE_CACHE[state_key].get("image_path")
+        if img_path and os.path.exists(img_path):
+          filename = os.path.basename(img_path)
+          return {
+              "msg_type": 7,
+              "file_path": img_path,
+              "content": f"🖼️ 对应错误日志截图: {filename}",
+          }
+        else:
+          return "⚠️ 当前打开的日志目录中未找到相关的图片截图！"
+
+      return _render_log_content(state_key, goto_page)
+
+    return "⚠️ 未知的 log 子指令，可选：`get`, `find 4`, `page`, `open`, `goto`"
 
   elif sub_cmd == "restart":
     target_port = getattr(client.data_mgr, "target_port", 25566)
@@ -111,7 +370,7 @@ def handle_op_command(
     if len(args) > 1 and args[1].lower() == "start":
       try:
         subprocess.Popen(
-            ["wscript.exe", r"Perseus\begin.vbs"]
+            ["wscript.exe", r"begin.vbs"]
         )
         return "🚀 已成功发起分离运行指令！"
       except Exception as e:
@@ -213,10 +472,17 @@ def handle_op_command(
     elif action == "get":
       return f"📌 当前群已被标记为：【群 {client.data_mgr.group_tags.get(group_id, '未绑定')}】"
 
+  # 🛑 权限加固：只有系统主管理员（DEFAULT_OP）具备提权/撤权操作的能力
   elif sub_cmd == "add":
+    if sender_openid_upper != DataManager.DEFAULT_OP:
+      return "❌ 拒绝执行：只有超级管理员才有权限赋予新的 OP 权限！"
+
     mentions = getattr(raw_message, "mentions", [])
     target_id = (
-        (getattr(mentions[0], "member_openid", None) or getattr(mentions[0], "id", None))
+        (
+            getattr(mentions[0], "member_openid", None)
+            or getattr(mentions[0], "id", None)
+        )
         if mentions
         else (args[1].strip() if len(args) > 1 else None)
     )
@@ -228,9 +494,15 @@ def handle_op_command(
     return f"✅ 用户 [{target_id[:6]}...] 已提权为 OP。"
 
   elif sub_cmd in ["remove", "del", "rm"]:
+    if sender_openid_upper != DataManager.DEFAULT_OP:
+      return "❌ 拒绝执行：只有超级管理员才有权限剥夺 OP 权限！"
+
     mentions = getattr(raw_message, "mentions", [])
     target_id = (
-        (getattr(mentions[0], "member_openid", None) or getattr(mentions[0], "id", None))
+        (
+            getattr(mentions[0], "member_openid", None)
+            or getattr(mentions[0], "id", None)
+        )
         if mentions
         else (args[1].strip() if len(args) > 1 else None)
     )
@@ -244,3 +516,104 @@ def handle_op_command(
     return "ℹ️ 该用户不是 OP。"
 
   return "⚠️ 未知的 OP 命令。可使用 `#op help` 查看帮助。"
+
+
+# ------------------- 私有辅助渲染函数 -------------------
+def _render_item_list(state_key: str, page: int) -> dict:
+  """格式化渲染文件/文件夹列表 (脱敏路径 + 记住当前页码)"""
+  state = LOG_STATE_CACHE[state_key]
+  items = state["items"]
+  mode = state.get("mode", "file")
+  page_size = state.get("page_size", 5)
+  total_pages = max(1, (len(items) + page_size - 1) // page_size)
+
+  if page < 1:
+    page = 1
+  if page > total_pages:
+    page = total_pages
+
+  state["page"] = page
+
+  start_idx = (page - 1) * page_size
+  end_idx = start_idx + page_size
+  current_items = items[start_idx:end_idx]
+
+  title_prefix = "📂 错误日志文件夹列表" if mode == "folder" else "📁 目录文件列表"
+  safe_dir_str = _sanitize_path(state["dir"])
+
+  if not current_items:
+    content = f"## {title_prefix}\n> 路径: `{safe_dir_str}`\n\n该目录下暂无任何数据。"
+  else:
+    list_lines = []
+    for idx, item_path in enumerate(current_items, start=start_idx + 1):
+      name = os.path.basename(item_path)
+      mtime_str = (
+          import_time_format(os.path.getmtime(item_path))
+          if os.path.exists(item_path)
+          else "未知"
+      )
+      icon = "📁" if mode == "folder" else "📄"
+      rel_idx = idx - start_idx
+      list_lines.append(
+          f"[{rel_idx}] {icon} **{name}** (全局#{idx} | `{mtime_str}`)"
+      )
+
+    content = (
+        f"## {title_prefix} (第 {page}/{total_pages} 页)\n"
+        f"**目标路径**：`{safe_dir_str}`\n\n"
+        + "\n".join(list_lines)
+        + "\n\n"
+        f"💡 使用 `#op log open [1-{len(current_items)}]` 打开当前页对应项，或使用 `#op log page [页码]` 翻页。"
+    )
+
+  return {"msg_type": 2, "content": content}
+
+
+def _render_log_content(state_key: str, page: int) -> dict:
+  """倒序格式化渲染日志文件内容"""
+  state = LOG_STATE_CACHE[state_key]
+  lines = state["lines"]
+  filename = os.path.basename(state["current_file"])
+  has_img = state.get("image_path") is not None
+
+  page_size = 10
+  total_lines = len(lines)
+  total_pages = max(1, (total_lines + page_size - 1) // page_size)
+
+  if page < 1:
+    page = 1
+  if page > total_pages:
+    page = total_pages
+
+  state["log_page"] = page
+
+  end_line = total_lines - (page - 1) * page_size
+  start_line = max(0, end_line - page_size)
+
+  selected_lines = lines[start_line:end_line]
+  content_text = (
+      "".join(selected_lines).strip() if selected_lines else "（该部分无内容）"
+  )
+
+  img_tip = (
+      "\n🖼️ **检测到对应错误截图**！输入 `#op log goto 0` 可直接发送图片。\n"
+      if has_img
+      else ""
+  )
+
+  md_content = (
+      f"## 📄 日志文件: `{filename}`\n"
+      f"**倒数页码**：第 {page}/{total_pages} 页（行范围: {start_line+1} ~ {end_line} / 共"
+      f" {total_lines} 行）\n"
+      f"{img_tip}\n"
+      f"```log\n{content_text}\n```\n\n"
+      "💡 使用 `#op log goto [页码]` 继续向上翻页。"
+  )
+
+  return {"msg_type": 2, "content": md_content}
+
+
+def import_time_format(timestamp: float) -> str:
+  import time
+
+  return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
