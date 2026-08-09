@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 # ==================== 配置区 ====================
 LOG_DIR = "logs"             # 指定日志文件夹名称
 LOG_FILE_NAME = "app.log"    # 主日志文件名
-MAX_BYTES = 5 * 1024 * 1024  # 单个文件最大 5MB
+MAX_BYTES = 512 * 1024  # 单个文件最大 5MB
 BACKUP_COUNT = 20            # 最多保留 20 个分卷备份
 # ================================================
 
