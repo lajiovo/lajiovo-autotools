@@ -46,6 +46,16 @@ class MyClient(botpy.Client):
       raise AttributeError("未能获取到 SDK 底层 _http 请求对象")
     return await http_client.request(route, json=payload)
 
+  async def _raw_put(self, route_path: str, payload: dict, **path_params):
+    """通用底层 HTTP PUT 请求，绕过 SDK 强类型校验"""
+    route = botpy.http.Route("PUT", route_path, **path_params)
+    http_client = getattr(self.api, "_http", None) or getattr(
+        self, "_http", None
+    )
+    if not http_client:
+      raise AttributeError("未能获取到 SDK 底层 _http 请求对象")
+    return await http_client.request(route, json=payload)
+
   # ------------------- 1. 文本/引用消息发送接口 -------------------
   async def send_group_text(
       self,
@@ -303,6 +313,40 @@ class MyClient(botpy.Client):
     )
     _log.info(f"🃏 [图文卡片发送成功] OpenID: {group_openid}")
 
+  # ------------------- 5. 指令面板 & 自定义菜单接口 -------------------
+  async def create_panel(
+      self,
+      scope: str,
+      panel: dict,
+      target_type: str = "all",
+      user_openids: list = None,
+      group_openids: list = None,
+  ):
+    """创建指令面板，仅支持 c2c 和 group 场景"""
+    if scope not in ["c2c", "group"]:
+      raise ValueError("仅支持 c2c 或 group 场景创建面板")
+
+    payload = {
+        "scope": scope,
+        "target_type": target_type,
+        "panel": panel,
+    }
+    if scope == "c2c" and target_type == "specific" and user_openids:
+      payload["user_openids"] = user_openids
+    elif scope == "group" and target_type == "specific" and group_openids:
+      payload["group_openids"] = group_openids
+
+    res = await self._raw_post("/v2/panels", payload)
+    _log.info(f"📋 [创建指令面板成功] Scope: {scope}, Response: {res}")
+    return res
+
+  async def set_c2c_menu(self, menu: dict):
+    """修改 C2C 全局自定义菜单"""
+    payload = {"menu": menu}
+    res = await self._raw_put("/v2/menu", payload)
+    _log.info(f"📌 [修改C2C自定义菜单成功] Response: {res}")
+    return res
+
   # ---------------------------------------------------------
 
   async def notify_group_3(self, message: str):
@@ -390,10 +434,76 @@ class MyClient(botpy.Client):
       self,
       args: list,
       sender_openid: str,
-      raw_message: GroupMessage,
+      raw_message: object,
       group_id: str,
   ):
     return handle_op_command(self, args, sender_openid, raw_message, group_id)
+
+  async def send_reply(
+      self, res: dict, target_id: str, msg_id: str, is_c2c: bool = False
+  ):
+    """统一合并的回复发送函数，根据 res 数据字典中的 msg_type 参数分发逻辑"""
+    msg_type = res.get("msg_type", 0)
+
+    if msg_type == 2:
+      if is_c2c:
+        await self.send_c2c_markdown_by_content(
+            user_openid=target_id,
+            content=res.get("content", ""),
+            msg_id=msg_id,
+            keyboard=res.get("keyboard"),
+        )
+      else:
+        await self.send_group_markdown_by_content(
+            group_openid=target_id,
+            content=res.get("content", ""),
+            msg_id=msg_id,
+            keyboard=res.get("keyboard"),
+        )
+    elif msg_type == 7:
+      if is_c2c:
+        await self.send_c2c_image(
+            user_openid=target_id,
+            file_path_or_url=res.get("url") or res.get("file_path"),
+            content=res.get("content", ""),
+            msg_id=msg_id,
+        )
+      else:
+        await self.send_group_image(
+            group_openid=target_id,
+            file_path_or_url=res.get("url") or res.get("file_path"),
+            content=res.get("content", ""),
+            msg_id=msg_id,
+        )
+    elif msg_type == 8:
+      card = res.get("card", {})
+      card_content = card.get("content", {})
+      if is_c2c:
+        await self.send_c2c_text(
+            user_openid=target_id,
+            content=card_content.get("title", ""),
+            msg_id=msg_id,
+        )
+      else:
+        await self.send_group_card(
+            group_openid=target_id,
+            title=card_content.get("title", ""),
+            desc=card_content.get("description", ""),
+            pic_url=card_content.get("pic_url", ""),
+            jump_url=card_content.get("url", ""),
+            msg_id=msg_id,
+        )
+    else:
+      if is_c2c:
+        await self.send_c2c_text(
+            user_openid=target_id, content=res.get("content", ""), msg_id=msg_id
+        )
+      else:
+        await self.send_group_text(
+            group_openid=target_id,
+            content=res.get("content", ""),
+            msg_id=msg_id,
+        )
 
   async def process_command(
       self,
@@ -403,78 +513,22 @@ class MyClient(botpy.Client):
       group_id: str,
       is_c2c: bool = False,
   ):
+    target_id = sender_openid if is_c2c else group_id
     parts = content[1:].strip().split()
     cmd = parts[0].lower() if parts else ""
-    sub_cmd = parts[1].lower() if len(parts) > 1 else ""
 
     # #op 指令分发与动态消息类型处理
     if cmd == "op":
       op_res = self.handle_op_command(
           parts[1:], sender_openid, raw_message, group_id
       )
+      if asyncio.iscoroutine(op_res):
+        op_res = await op_res
+
       if isinstance(op_res, dict):
-        msg_type = op_res.get("msg_type", 0)
-        if msg_type == 2:
-          if is_c2c:
-            await self.send_c2c_markdown_by_content(
-                user_openid=sender_openid,
-                content=op_res.get("content", ""),
-                msg_id=raw_message.id,
-                keyboard=op_res.get("keyboard"),
-            )
-          else:
-            await self.send_group_markdown_by_content(
-                group_openid=group_id,
-                content=op_res.get("content", ""),
-                msg_id=raw_message.id,
-                keyboard=op_res.get("keyboard"),
-            )
-        elif msg_type == 7:
-          if is_c2c:
-            await self.send_c2c_image(
-                user_openid=sender_openid,
-                file_path_or_url=op_res.get("url") or op_res.get("file_path"),
-                content=op_res.get("content", ""),
-                msg_id=raw_message.id,
-            )
-          else:
-            await self.send_group_image(
-                group_openid=group_id,
-                file_path_or_url=op_res.get("url") or op_res.get("file_path"),
-                content=op_res.get("content", ""),
-                msg_id=raw_message.id,
-            )
-        elif msg_type == 8:
-          card = op_res.get("card", {})
-          card_content = card.get("content", {})
-          if is_c2c:
-            await self.send_c2c_text(
-                user_openid=sender_openid,
-                content=card_content.get("title", ""),
-                msg_id=raw_message.id,
-            )
-          else:
-            await self.send_group_card(
-                group_openid=group_id,
-                title=card_content.get("title", ""),
-                desc=card_content.get("description", ""),
-                pic_url=card_content.get("pic_url", ""),
-                jump_url=card_content.get("url", ""),
-                msg_id=raw_message.id,
-            )
-        else:
-          if is_c2c:
-            await self.send_c2c_text(
-                user_openid=sender_openid,
-                content=op_res.get("content", ""),
-                msg_id=raw_message.id,
-            )
-          else:
-            await self.send_group_text(
-                group_openid=group_id,
-                content=op_res.get("content", ""),
-                msg_id=raw_message.id,
-            )
+        await self.send_reply(
+            op_res, target_id, raw_message.id, is_c2c=is_c2c
+        )
         return None
       return op_res
 
@@ -509,72 +563,7 @@ class MyClient(botpy.Client):
 
     # 支持 handle_command 返回字典格式，灵活判定 msg_type
     if isinstance(game_res, dict):
-      msg_type = game_res.get("msg_type", 0)
-      # msg_type = 2: Markdown / Keyboard
-      if msg_type == 2:
-        if is_c2c:
-          await self.send_c2c_markdown_by_content(
-              user_openid=sender_openid,
-              content=game_res.get("content", ""),
-              msg_id=raw_message.id,
-              keyboard=game_res.get("keyboard"),
-          )
-        else:
-          await self.send_group_markdown_by_content(
-              group_openid=group_id,
-              content=game_res.get("content", ""),
-              msg_id=raw_message.id,
-              keyboard=game_res.get("keyboard"),
-          )
-      # msg_type = 7: 富媒体/图片
-      elif msg_type == 7:
-        if is_c2c:
-          await self.send_c2c_image(
-              user_openid=sender_openid,
-              file_path_or_url=game_res.get("url") or game_res.get("file_path"),
-              content=game_res.get("content", ""),
-              msg_id=raw_message.id,
-          )
-        else:
-          await self.send_group_image(
-              group_openid=group_id,
-              file_path_or_url=game_res.get("url") or game_res.get("file_path"),
-              content=game_res.get("content", ""),
-              msg_id=raw_message.id,
-          )
-      # msg_type = 8: 卡片
-      elif msg_type == 8:
-        card = game_res.get("card", {})
-        card_content = card.get("content", {})
-        if is_c2c:
-          await self.send_c2c_text(
-              user_openid=sender_openid,
-              content=card_content.get("title", ""),
-              msg_id=raw_message.id,
-          )
-        else:
-          await self.send_group_card(
-              group_openid=group_id,
-              title=card_content.get("title", ""),
-              desc=card_content.get("description", ""),
-              pic_url=card_content.get("pic_url", ""),
-              jump_url=card_content.get("url", ""),
-              msg_id=raw_message.id,
-          )
-      # 默认普通文本
-      else:
-        if is_c2c:
-          await self.send_c2c_text(
-              user_openid=sender_openid,
-              content=game_res.get("content", ""),
-              msg_id=raw_message.id,
-          )
-        else:
-          await self.send_group_text(
-              group_openid=group_id,
-              content=game_res.get("content", ""),
-              msg_id=raw_message.id,
-          )
+      await self.send_reply(game_res, target_id, raw_message.id, is_c2c=is_c2c)
       return None
 
     # 若返回普通字符串，则交给 _handle_group_msg / _handle_c2c_msg 发送纯文本消息
@@ -595,12 +584,15 @@ class MyClient(botpy.Client):
         f" 内容: {content}"
     )
 
-    # 如果消息开头为 TARGET_BOT_PREFIX
+    # 如果消息开头为 TARGET_BOT_PREFIX，移除 @ 后自动去除开头的多余空格
     if content.startswith(TARGET_BOT_PREFIX):
-      # 1. 剥离掉 TARGET_BOT_PREFIX 前缀
       content = content[len(TARGET_BOT_PREFIX) :].strip()
-      # 2. 删除后续开头的**所有** '#' 字符，然后统一在最前面添加一个 '#'
-      content = "#" + content.lstrip("#").strip()
+
+    # 校验并归一化指令前缀，支持 #、/、/# 开头
+    if content.startswith("/#"):
+      content = "#" + content[2:].lstrip("#").strip()
+    elif content.startswith(("#", "/")):
+      content = "#" + content[1:].lstrip("#").strip()
 
     if content.startswith("#"):
       reply_text = await self.process_command(
@@ -626,6 +618,12 @@ class MyClient(botpy.Client):
     _log.info(
         f"[{event_name}] 单聊消息 | 发送者: {sender_openid} | 内容: {content}"
     )
+
+    # 校验并归一化指令前缀，支持 #、/、/# 开头
+    if content.startswith("/#"):
+      content = "#" + content[2:].lstrip("#").strip()
+    elif content.startswith(("#", "/")):
+      content = "#" + content[1:].lstrip("#").strip()
 
     if content.startswith("#"):
       reply_text = await self.process_command(
