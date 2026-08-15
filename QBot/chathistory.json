@@ -1,0 +1,46 @@
+{
+  "user_nicknames": {},
+  "group_nicknames": {},
+  "private_history": {},
+  "group_history": {
+    "": [
+      {
+        "user_id": "",
+        "role": "user",
+        "content": "🟢 机器人已上线并准备就绪！"
+      },
+      {
+        "user_id": "BOT",
+        "role": "bot",
+        "content": "hi"
+      },
+      {
+        "user_id": "",
+        "role": "user",
+        "content": "nb"
+      },
+      {
+        "user_id": "BOT",
+        "role": "bot",
+        "content": "这么强"
+      },
+      {
+        "user_id": "",
+        "role": "user",
+        "content": "？"
+      },
+      {
+        "user_id": "BOT",
+        "role": "bot",
+        "content": "对"
+      }
+    ],
+    "": [
+      {
+        "user_id": "BOT",
+        "role": "bot",
+        "content": "hi"
+      }
+    ]
+  }
+}
