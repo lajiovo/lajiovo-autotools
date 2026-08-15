@@ -19,8 +19,8 @@ if os.path.exists(CONFIG_PATH):
     APP_ID = test_config["appid"]
     APP_SECRET = test_config["secret"]
 else:
-    APP_ID = "1905315677"
-    APP_SECRET = "gs5IWl0GXp7Qj3Oj5RoCazPpGiAd7b6c"
+    APP_ID = ""
+    APP_SECRET = ""
 
 # 并发限制信号量
 RUN_TASK_SEMAPHORE = threading.Semaphore(2)
@@ -39,7 +39,7 @@ def apply_sdk_patch():
 
 # 数据管理类（专职负责持久化与数据库/数据存储操作）
 class DataManager:
-    DEFAULT_OP = "3A771844DA3A1352AA130920DA0F685A"
+    DEFAULT_OP = ""
 
     def __init__(self):
         self.op_list = set()
