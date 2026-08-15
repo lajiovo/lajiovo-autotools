@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Bot 聊天控制台</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; height: 100vh; display: flex; justify-content: center; align-items: center; }
+        
+        /* 登录卡片 */
+        .login-card { background: #fff; padding: 35px 30px; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); width: 340px; text-align: center; }
+        .login-card h2 { margin-bottom: 20px; color: #1a1a1a; font-size: 20px; }
+        .login-card input { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid #d9d9d9; border-radius: 6px; outline: none; transition: all 0.3s; font-size: 14px; }
+        .login-card input:focus { border-color: #1890ff; box-shadow: 0 0 0 2px rgba(24,144,255,0.2); }
+        .login-card button { width: 100%; padding: 12px; background: #1890ff; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: bold; transition: background 0.3s; }
+        .login-card button:hover { background: #40a9ff; }
+
+        /* 主聊天界面 Container */
+        .container { display: none; width: 92vw; height: 90vh; max-width: 1200px; background: #fff; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); overflow: hidden; }
+        
+        /* 侧边栏列表 */
+        .sidebar { width: 300px; border-right: 1px solid #e8e8e8; display: flex; flex-direction: column; background: #fafafa; }
+        .sidebar-header { padding: 16px; border-bottom: 1px solid #e8e8e8; display: flex; justify-content: space-between; align-items: center; background: #f0f2f5; }
+        .sidebar-header h3 { font-size: 15px; color: #262626; font-weight: 600; }
+        .refresh-btn { background: #fff; border: 1px solid #d9d9d9; color: #595959; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+        .refresh-btn:hover { color: #1890ff; border-color: #1890ff; }
+        
+        .chat-list { flex: 1; overflow-y: auto; }
+        .chat-item { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s; }
+        .chat-item:hover { background: #e6f7ff; }
+        .chat-item.active { background: #bae7ff; border-left: 4px solid #1890ff; }
+        .chat-item .title { font-size: 14px; color: #262626; font-weight: 500; margin-bottom: 4px; display: flex; justify-content: space-between; }
+        .chat-item .sub { font-size: 12px; color: #8c8c8c; }
+
+        /* 主消息面板 */
+        .main { flex: 1; display: flex; flex-direction: column; background: #fff; }
+        .chat-header { padding: 16px; border-bottom: 1px solid #e8e8e8; font-size: 16px; font-weight: 600; color: #262626; background: #fff; display: flex; justify-content: space-between; align-items: center; }
+        
+        .messages { flex: 1; padding: 20px; overflow-y: auto; background: #f5f5f5; display: flex; flex-direction: column; gap: 12px; }
+        .msg { max-width: 65%; padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; word-break: break-word; position: relative; }
+        .msg.user { align-self: flex-start; background: #fff; color: #262626; border: 1px solid #e8e8e8; border-top-left-radius: 2px; }
+        .msg.bot { align-self: flex-end; background: #1890ff; color: #fff; border-top-right-radius: 2px; }
+        .msg .sender-info { font-size: 11px; margin-bottom: 4px; opacity: 0.75; }
+
+        /* 底部输入框区域 */
+        .input-area { padding: 16px; border-top: 1px solid #e8e8e8; display: flex; gap: 12px; background: #fff; }
+        .input-area textarea { flex: 1; height: 48px; padding: 10px 12px; border: 1px solid #d9d9d9; border-radius: 6px; resize: none; outline: none; font-family: inherit; font-size: 14px; }
+        .input-area textarea:focus { border-color: #1890ff; }
+        .input-area button { padding: 0 24px; background: #52c41a; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: background 0.3s; }
+        .input-area button:hover { background: #73d13d; }
+        .exit-btn { background: #ff4d4f; color: white; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; transition: background 0.2s; }
+        .exit-btn:hover { background: #ff7875; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. 登录面板 -->
+    <div id="loginCard" class="login-card">
+        <h2>系统鉴权登录</h2>
+        <input type="password" id="authKeyInput" placeholder="请输入 key.json 配置的明文密码" autocomplete="off" onkeydown="if(event.keyCode===13){login();}">
+        <button id="loginBtn" onclick="login()">登录控制台</button>
+    </div>
+
+    <!-- 2. 控制台主界面 -->
+    <div id="mainContainer" class="container">
+        <!-- 左侧会话列表 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h3>会话列表</h3>
+                <button class="refresh-btn" onclick="fetchTargetLists()">手动刷新</button>
+            </div>
+            <div id="chatList" class="chat-list"></div>
+        </div>
+
+        <!-- 右侧消息面板 -->
+        <div class="main">
+            <div id="chatHeader" class="chat-header">
+                <span id="chatTitle">请选择左侧会话进行沟通</span>
+                <button class="exit-btn" onclick="clearAndExit()">退出系统</button>
+            </div>
+            <div id="messagesList" class="messages"></div>
+            <div class="input-area">
+                <textarea id="msgInput" placeholder="输入消息 (Enter 发送，Shift + Enter 换行)..." autocomplete="off" onkeydown="if(event.keyCode===13&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
+                <button onclick="sendMsg()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let AUTH_KEY = "";
+        let currentTarget = null; // 当前选中的会话信息: { id, isGroup, nickname }
+        let pollTimer = null;
+
+        // 通用 Fetch 包装类：将明文密码塞入 X-Api-Key Header 供 server.py 校验
+        async function apiFetch(url, options = {}) {
+            options.headers = options.headers || {};
+            options.headers["X-Api-Key"] = AUTH_KEY;
+            
+            try {
+                const res = await fetch(url, options);
+                if (res.status === 401) {
+                    clearAndExit("身份校验失败：密码不正确或身份信息过期！");
+                    throw new Error("401 Unauthorized");
+                }
+                return await res.json();
+            } catch (err) {
+                console.error("API 请求异常:", err);
+                throw err;
+            }
+        }
+
+        // 登录函数
+        async function login() {
+            const keyInput = document.getElementById("authKeyInput").value.trim();
+            if (!keyInput) return alert("请输入密码！");
+
+            const btn = document.getElementById("loginBtn");
+            btn.innerText = "正在验证...";
+            btn.disabled = true;
+
+            AUTH_KEY = keyInput;
+
+            try {
+                // 请求 /api/users 验证 key 是否有效
+                const res = await apiFetch("/api/users");
+                if (res.status === "success") {
+                    document.getElementById("authKeyInput").value = "";
+                    document.getElementById("loginCard").style.display = "none";
+                    document.getElementById("mainContainer").style.display = "flex";
+                    
+                    await fetchTargetLists();
+                    startPolling(); // 开启定时轮询
+                }
+            } catch (err) {
+                // 校验失败逻辑已在 apiFetch 统一拦截
+            } finally {
+                btn.innerText = "登录控制台";
+                btn.disabled = false;
+            }
+        }
+
+        // 获取并渲染私聊与群聊会话列表
+        async function fetchTargetLists() {
+            try {
+                const [uRes, gRes] = await Promise.all([
+                    apiFetch("/api/users"),
+                    apiFetch("/api/groups")
+                ]);
+
+                const chatListEl = document.getElementById("chatList");
+                chatListEl.innerHTML = "";
+
+                // 渲染私聊列表
+                if (uRes.data && Array.isArray(uRes.data)) {
+                    uRes.data.forEach(user => {
+                        const name = user.nickname || "用户 " + user.user_id.slice(-6);
+                        createChatItem(user.user_id, false, name, `私聊 (${user.user_id})`);
+                    });
+                }
+
+                // 渲染群聊列表
+                if (gRes.data && Array.isArray(gRes.data)) {
+                    gRes.data.forEach(group => {
+                        const tag = group.tag_num ? `[群${group.tag_num}] ` : "";
+                        const name = tag + (group.nickname || "群聊 " + group.group_id.slice(-6));
+                        createChatItem(group.group_id, true, name, `群聊 (${group.group_id})`);
+                    });
+                }
+            } catch (err) {
+                console.error("刷新会话列表失败:", err);
+            }
+        }
+
+        // 创建单条会话列表项 DOM
+        function createChatItem(id, isGroup, name, subText) {
+            const chatListEl = document.getElementById("chatList");
+            const div = document.createElement("div");
+            div.className = "chat-item";
+            if (currentTarget && currentTarget.id === id) div.classList.add("active");
+            
+            div.innerHTML = `
+                <div class="title">
+                    <span>${escapeHtml(name)}</span>
+                </div>
+                <div class="sub">${escapeHtml(subText)}</div>
+            `;
+            
+            div.onclick = () => selectChat(id, isGroup, name, div);
+            chatListEl.appendChild(div);
+        }
+
+        // 选中某个会话
+        async function selectChat(id, isGroup, name, element) {
+            document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
+            if (element) element.classList.add("active");
+
+            currentTarget = { id, isGroup, nickname: name };
+            document.getElementById("chatTitle").innerText = name;
+            await loadHistory();
+        }
+
+        // 加载当前选中会话的历史聊天记录
+        async function loadHistory() {
+            if (!currentTarget) return;
+            try {
+                const res = await apiFetch(`/api/history?target_id=${currentTarget.id}&is_group=${currentTarget.isGroup}`);
+                if (res.status === "success") {
+                    renderMessages(res.data || []);
+                }
+            } catch (err) {
+                console.error("加载聊天历史失败:", err);
+            }
+        }
+
+        // 渲染消息体到聊天区域
+        function renderMessages(messages) {
+            const box = document.getElementById("messagesList");
+            box.innerHTML = "";
+            
+            messages.forEach(msg => {
+                const isBot = msg.role === "bot";
+                const msgEl = document.createElement("div");
+                msgEl.className = `msg ${isBot ? "bot" : "user"}`;
+                
+                const sender = isBot ? "机器人" : (msg.user_id || "用户");
+                msgEl.innerHTML = `
+                    <div class="sender-info">${escapeHtml(sender)}</div>
+                    <div>${escapeHtml(msg.content)}</div>
+                `;
+                box.appendChild(msgEl);
+            });
+
+            // 保持滚动条处于最底部
+            box.scrollTop = box.scrollHeight;
+        }
+
+        // 发送消息逻辑
+        async function sendMsg() {
+            if (!currentTarget) return alert("请先选择聊天目标！");
+            const input = document.getElementById("msgInput");
+            const content = input.value.trim();
+            if (!content) return;
+
+            const url = currentTarget.isGroup ? "/api/send_group" : "/api/send_c2c";
+            const payload = currentTarget.isGroup 
+                ? { group_openid: currentTarget.id, content, key: AUTH_KEY } 
+                : { user_openid: currentTarget.id, content, key: AUTH_KEY };
+
+            try {
+                input.value = "";
+                const res = await apiFetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.status === "success") {
+                    // 延迟 300ms 重新拉取历史记录查看刚发送的消息
+                    setTimeout(loadHistory, 300);
+                }
+            } catch (err) {
+                console.error("发送消息失败:", err);
+            }
+        }
+
+        // 定时轮询器：每 3 秒监测一次是否有新消息到达
+        function startPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = setInterval(async () => {
+                try {
+                    const res = await apiFetch("/api/check_new?reset=true");
+                    if (res.data && res.data.has_new) {
+                        // 若有新消息且当前打开了特定会话，直接刷新消息面板
+                        if (currentTarget) {
+                            await loadHistory();
+                        }
+                    }
+                } catch (err) {
+                    console.error("轮询检测失败:", err);
+                }
+            }, 3000);
+        }
+
+        // 退出登录并完全清理上下文数据
+        function clearAndExit(msg) {
+            if (pollTimer) clearInterval(pollTimer);
+            AUTH_KEY = "";
+            currentTarget = null;
+            document.getElementById("messagesList").innerHTML = "";
+            document.getElementById("chatList").innerHTML = "";
+            document.getElementById("mainContainer").style.display = "none";
+            document.getElementById("loginCard").style.display = "block";
+            if (msg) alert(msg);
+        }
+
+        // 转义防止 HTML 注入攻击
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+
+        // 窗口关闭/刷新时置空内存存储的 Key
+        window.onunload = function() {
+            AUTH_KEY = "";
+        };
+    </script>
+</body>
+</html>
