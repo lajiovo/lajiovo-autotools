@@ -7,11 +7,11 @@ from config import DataManager
 
 # ------------------- 预设日志路径配置 -------------------
 PRESET_LOG_PATHS = [
-    r"\AzurPilot\log",
-    r"\Perseus\logs",
-    r"\Perseus\QBot",
+    r"D:\***\AzurPilot\log",
+    r"D:\***\Perseus\logs",
+    r"D:\***\Perseus\QBot",
 ]
-ALAS_ERROR_LOG_PATH = r"\AzurPilot\log\error\alas"
+ALAS_ERROR_LOG_PATH = r"D:\***\AzurPilot\log\error\alas"
 
 # 用于在内存中缓存各群/用户当前的日志选择与文件读取位置 (状态记录)
 LOG_STATE_CACHE = {}
@@ -26,7 +26,7 @@ def _sanitize_path(path_str: str) -> str:
   )
 
 
-def handle_op_command(
+async def handle_op_command(
     client,
     args: list,
     sender_openid: str,
@@ -69,6 +69,9 @@ def handle_op_command(
         "• #op list - 查看所有 OP 管理员\n"
         "• #op add [@某人/OpenID] - [主管理员] 添加管理员\n"
         "• #op del/remove [@某人/OpenID] - [主管理员] 移除管理员\n\n"
+        "📌 【面板与菜单管理】\n"
+        "• #op panel [c2c/group] - 创建包含预设指令(#ping, #help, #打捞, #运势, #op)的指令面板\n"
+        "• #op menu - 创建 C2C 全局自定义菜单\n\n"
         "📌 【群绑定与 通知/Push 管理】\n"
         "• #op group <数字> - 标记当前群编号 (例: #op group 1)\n"
         "• #op group list - 查看所有群编号绑定\n"
@@ -101,6 +104,84 @@ def handle_op_command(
         "• #op sv music/ffm - 单开线程运行音频处理任务 (ffmpeg)\n"
         "• #op sv music/stop - 停止 MusicDL 服务及清理 37777 端口"
     )
+
+  # ------------------- #op panel 指令面板交互接口 -------------------
+  elif sub_cmd == "panel":
+    scope = args[1].lower() if len(args) > 1 else "group"
+    if scope not in ["c2c", "group"]:
+      return "⚠️ 作用域仅支持 `c2c` 或 `group`！例：`#op panel group` 或 `#op panel c2c`"
+
+    target_type = "specific" if scope == "group" and group_id else "all"
+    group_openids = [group_id] if scope == "group" and group_id else None
+    user_openids = [sender_openid] if scope == "c2c" else None
+
+    panel_payload = {
+        "items": [
+            {"type": "command", "name": "#ping", "desc": "检查机器人状态"},
+            {"type": "command", "name": "#help", "desc": "获取菜单帮助说明"},
+            {"type": "command", "name": "#打捞", "desc": "运行打捞玩法"},
+            {"type": "command", "name": "#运势", "desc": "查看今日运势"},
+            {"type": "command", "name": "#op", "desc": "OP 管理员控制"},
+        ],
+        "remark": f"自动化系统{scope.upper()}指令面板",
+    }
+
+    try:
+      res = await client.create_panel(
+          scope=scope,
+          panel=panel_payload,
+          target_type=target_type,
+          user_openids=user_openids,
+          group_openids=group_openids,
+      )
+      panel_id = res.get("panel_id", "未知")
+      return f"✅ 指令面板创建成功！\n- 生效场景: {scope}\n- 面板 ID: {panel_id}"
+    except Exception as e:
+      return f"❌ 创建指令面板失败: {e}"
+
+  # ------------------- #op menu C2C自定义菜单接口 -------------------
+  elif sub_cmd == "menu":
+    menu_payload = {
+        "items": [
+            {
+                "type": "send_message",
+                "name": "状态查询",
+                "send_message": "#ping",
+            },
+            {
+                "type": "send_message",
+                "name": "帮助",
+                "send_message": "#help",
+            },
+            {
+                "type": "menu",
+                "name": "日常功能",
+                "sub_menu_items": [
+                    {"type": "send_message", "name": "打捞", "send_message": "#打捞"},
+                    {"type": "send_message", "name": "运势", "send_message": "#运势"},
+                    {"type": "send_message", "name": "船坞", "send_message": "#船坞"},
+                ],
+            },
+            {
+                "type": "menu",
+                "name": "OP管理",
+                "sub_menu_items": [
+                    {"type": "send_message", "name": "#op help", "send_message": "#op help"},
+                    {"type": "send_message", "name": "#op restart", "send_message": "#op restart"},
+                    {"type": "send_message", "name": "#op run", "send_message": "#op run"},
+                    {"type": "send_message", "name": "#op log", "send_message": "#op log"},
+                    {"type": "send_message", "name": "#op sv ping", "send_message": "#op sv ping"},
+                ],
+            },
+        ]
+    }
+
+    try:
+      res = await client.set_c2c_menu(menu=menu_payload)
+      version = res.get("version", "未知")
+      return f"✅ C2C 自定义菜单修改成功！\n- 当前菜单版本号: {version}"
+    except Exception as e:
+      return f"❌ 修改自定义菜单失败: {e}"
 
   # ------------------- #op log 日志查看相关指令 -------------------
   elif sub_cmd == "log":
@@ -370,7 +451,7 @@ def handle_op_command(
     if len(args) > 1 and args[1].lower() == "start":
       try:
         subprocess.Popen(
-            ["wscript.exe", r"begin.vbs"]
+            ["wscript.exe", r"D:\***\Perseus\begin.vbs"]
         )
         return "🚀 已成功发起分离运行指令！"
       except Exception as e:
