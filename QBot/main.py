@@ -8,13 +8,20 @@ import botpy
 from botpy.message import C2CMessage, GroupMessage
 from botpy.types.message import MarkdownPayload, MessageMarkdownParams
 
-from config import APP_ID, APP_SECRET, DataManager, _log, apply_sdk_patch
+from config import (
+    APP_ID,
+    APP_SECRET,
+    DataManager,
+    ChatHistoryManager,
+    _log,
+    apply_sdk_patch,
+)
 from game import GameSystem
 from opcmd import handle_op_command
 from server import start_http_servers
 
 # ------------------- 文件配置区 -------------------
-TARGET_BOT_PREFIX = "<@xxxx>"
+TARGET_BOT_PREFIX = "<@3DAF97B3287EC992B7389C79EEDD2261>"
 # --------------------------------------------------
 
 apply_sdk_patch()
@@ -27,13 +34,23 @@ class MyClient(botpy.Client):
     self.start_time = time.time()  # 记录程序初始化开机时间戳
     self.bot_loop = None
     self.data_mgr = DataManager()
+    self.chat_mgr = ChatHistoryManager()  # 初始化聊天记录管理器
     self.game_sys = GameSystem(self.data_mgr)
+    
+    # 消息跟踪标记（用于轮询获取新消息）
+    self._last_msg_time = time.time()
+    self._has_new_message = False
 
   async def on_ready(self):
     _log.info(f"robot 「{self.robot.name}」 已成功上线！")
     self.bot_loop = asyncio.get_running_loop()
     start_http_servers(self)
     await self.notify_group_3("🟢 机器人已上线并准备就绪！")
+
+  def _update_msg_tracker(self):
+    """私有辅助函数：当接收到新消息时更新状态"""
+    self._last_msg_time = time.time()
+    self._has_new_message = True
 
   # ------------------- 核心 HTTP 底层请求封装 -------------------
   async def _raw_post(self, route_path: str, payload: dict, **path_params):
@@ -100,6 +117,72 @@ class MyClient(botpy.Client):
         user_openid=user_openid,
     )
     _log.info(f"💬 [单聊文本消息发送成功] UserOpenID: {user_openid}")
+
+  # ------------------- SERVER 专供对外调用接口 -------------------
+  async def api_send_c2c_text(self, user_openid: str, content: str):
+    """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录"""
+    await self.send_c2c_text(user_openid=user_openid, content=content)
+    self.chat_mgr.append_private_message(
+        user_id=user_openid, content=content, role="bot"
+    )
+
+  async def api_send_group_text(self, group_openid: str, content: str):
+    """供 Server 调用的主动发送群聊纯文本消息接口，并同步写入聊天记录"""
+    await self.send_group_text(group_openid=group_openid, content=content)
+    self.chat_mgr.append_group_message(
+        group_id=group_openid, user_id="BOT", content=content, role="bot"
+    )
+
+  def get_chat_history(self, target_id: str, is_group: bool = False):
+    """获取指定群或用户的聊天历史记录"""
+    if is_group:
+      return self.chat_mgr.get_group_history(target_id)
+    return self.chat_mgr.get_private_history(target_id)
+
+  def get_nickname(self, target_id: str, is_group: bool = False):
+    """获取指定群或用户的昵称"""
+    target_id = str(target_id)
+    if is_group:
+      return self.chat_mgr.group_nicknames.get(target_id, "")
+    return self.chat_mgr.user_nicknames.get(target_id, "")
+
+  def get_user_list(self):
+    """获取所有已产生私聊记录/设置昵称的用户列表及其昵称 mapping"""
+    user_ids = set(self.chat_mgr.private_history.keys()) | set(self.chat_mgr.user_nicknames.keys())
+    return [
+        {
+            "user_id": uid,
+            "nickname": self.chat_mgr.user_nicknames.get(uid, "")
+        }
+        for uid in user_ids
+    ]
+
+  def get_group_list(self):
+    """获取所有已产生群聊记录/设置昵称的群聊列表及其昵称/编号 mapping"""
+    group_ids = set(self.chat_mgr.group_history.keys()) | set(self.chat_mgr.group_nicknames.keys()) | set(self.data_mgr.group_tags.keys())
+    return [
+        {
+            "group_id": gid,
+            "nickname": self.chat_mgr.group_nicknames.get(gid, ""),
+            "tag_num": self.data_mgr.group_tags.get(gid, None)
+        }
+        for gid in group_ids
+    ]
+
+  def check_has_new_message(self, reset: bool = True):
+    """
+    获取是否有新消息产生
+    :param reset: 是否在检查后重置状态，默认为 True（即消费式查询）
+    :return: dict 包含状态标志和最后收到消息的时间戳
+    """
+    has_new = self._has_new_message
+    last_time = self._last_msg_time
+    if reset and has_new:
+      self._has_new_message = False
+    return {
+        "has_new": has_new,
+        "last_msg_time": last_time
+    }
 
   # ------------------- 2. Markdown & 内嵌键盘接口 -------------------
   async def send_group_markdown_by_content(
@@ -444,19 +527,20 @@ class MyClient(botpy.Client):
   ):
     """统一合并的回复发送函数，根据 res 数据字典中的 msg_type 参数分发逻辑"""
     msg_type = res.get("msg_type", 0)
+    reply_content = res.get("content", "")
 
     if msg_type == 2:
       if is_c2c:
         await self.send_c2c_markdown_by_content(
             user_openid=target_id,
-            content=res.get("content", ""),
+            content=reply_content,
             msg_id=msg_id,
             keyboard=res.get("keyboard"),
         )
       else:
         await self.send_group_markdown_by_content(
             group_openid=target_id,
-            content=res.get("content", ""),
+            content=reply_content,
             msg_id=msg_id,
             keyboard=res.get("keyboard"),
         )
@@ -465,23 +549,24 @@ class MyClient(botpy.Client):
         await self.send_c2c_image(
             user_openid=target_id,
             file_path_or_url=res.get("url") or res.get("file_path"),
-            content=res.get("content", ""),
+            content=reply_content,
             msg_id=msg_id,
         )
       else:
         await self.send_group_image(
             group_openid=target_id,
             file_path_or_url=res.get("url") or res.get("file_path"),
-            content=res.get("content", ""),
+            content=reply_content,
             msg_id=msg_id,
         )
     elif msg_type == 8:
       card = res.get("card", {})
       card_content = card.get("content", {})
+      reply_content = card_content.get("title", "")
       if is_c2c:
         await self.send_c2c_text(
             user_openid=target_id,
-            content=card_content.get("title", ""),
+            content=reply_content,
             msg_id=msg_id,
         )
       else:
@@ -496,13 +581,24 @@ class MyClient(botpy.Client):
     else:
       if is_c2c:
         await self.send_c2c_text(
-            user_openid=target_id, content=res.get("content", ""), msg_id=msg_id
+            user_openid=target_id, content=reply_content, msg_id=msg_id
         )
       else:
         await self.send_group_text(
             group_openid=target_id,
-            content=res.get("content", ""),
+            content=reply_content,
             msg_id=msg_id,
+        )
+
+    # 自动记录机器人的回复
+    if reply_content:
+      if is_c2c:
+        self.chat_mgr.append_private_message(
+            user_id=target_id, content=reply_content, role="bot"
+        )
+      else:
+        self.chat_mgr.append_group_message(
+            group_id=target_id, user_id="BOT", content=reply_content, role="bot"
         )
 
   async def process_command(
@@ -584,6 +680,13 @@ class MyClient(botpy.Client):
         f" 内容: {content}"
     )
 
+    # 自动记录接收到的群聊消息并更新消息标记
+    if content:
+      self._update_msg_tracker()
+      self.chat_mgr.append_group_message(
+          group_id=group_id, user_id=sender_openid, content=content, role="user"
+      )
+
     # 如果消息开头为 TARGET_BOT_PREFIX，移除 @ 后自动去除开头的多余空格
     if content.startswith(TARGET_BOT_PREFIX):
       content = content[len(TARGET_BOT_PREFIX) :].strip()
@@ -603,6 +706,10 @@ class MyClient(botpy.Client):
           await self.api.post_group_message(
               group_openid=group_id, msg_type=0, msg_id=msg_id, content=reply_text
           )
+          # 自动记录机器人的文本回复
+          self.chat_mgr.append_group_message(
+              group_id=group_id, user_id="BOT", content=reply_text, role="bot"
+          )
         except Exception as e:
           _log.error(f"指令回复失败: {e}")
 
@@ -619,6 +726,13 @@ class MyClient(botpy.Client):
         f"[{event_name}] 单聊消息 | 发送者: {sender_openid} | 内容: {content}"
     )
 
+    # 自动记录接收到的私聊消息并更新消息标记
+    if content:
+      self._update_msg_tracker()
+      self.chat_mgr.append_private_message(
+          user_id=sender_openid, content=content, role="user"
+      )
+
     # 校验并归一化指令前缀，支持 #、/、/# 开头
     if content.startswith("/#"):
       content = "#" + content[2:].lstrip("#").strip()
@@ -633,6 +747,10 @@ class MyClient(botpy.Client):
         try:
           await self.send_c2c_text(
               user_openid=sender_openid, content=reply_text, msg_id=msg_id
+          )
+          # 自动记录机器人的文本回复
+          self.chat_mgr.append_private_message(
+              user_id=sender_openid, content=reply_text, role="bot"
           )
         except Exception as e:
           _log.error(f"单聊指令回复失败: {e}")
