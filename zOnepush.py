@@ -10,7 +10,7 @@ import subprocess
 import threading
 import multiprocessing
 from flask import Flask, request, send_from_directory
-from zBarkCustom import PerseusNotifyMsg, PerseusErrorMsg
+from zBarkCustom import PerseusNotifyMsg, PerseusErrorMsg,PerseusWarningMsg
 from zMainHandler import run_alas_mumu_check, handlerun, Handlepush
 import zAlas
 import zMumu
@@ -19,13 +19,16 @@ import zMusicDL
 import win32gui
 import win32con
 from zFfmpeg import process_audio as ffmrun
+import asyncio
+from zCpolar import start_tunnel, stop_tunnel, query_public_urls
+from zLK import crawl_lightnovel_to_epub
 
 app = Flask(__name__)
 LISTEN_PORT = 25566
 
 # QBot 相关配置
-PYTHONW_PATH = r"\Programs\Python\Python314\pythonw.exe"
-QBOT_SCRIPT_PATH = r"Perseus\QBot\main.py"
+PYTHONW_PATH = r"Programs\Python\Python314\pythonw.exe"
+QBOT_SCRIPT_PATH = r"QBot\main.py"
 # 专用的精准识别标记（写在命令行参数中）
 QBOT_IDENTIFIER = "--PERSEUS_QBOT_INSTANCE"
 
@@ -35,11 +38,165 @@ timer_thread = None
 timer_event = threading.Event()  # 用于优雅控制和停止定时器线程
 
 # 2. 新增 MusicDL 相关配置与全局变量
-MUSIC_EXE_PATH = r"music-dl-desktop-rust.exe"
+MUSIC_EXE_PATH = r"musicdl\music-dl-desktop-rust.exe"
 MUSIC_PORT = 37777
 musicdl_thread = None
 # 2. 全局线程控制对象增加 ffm_thread
 ffmpeg_thread = None
+
+# 全局变量：存储当前唯一正在运行的任务信息
+current_task = {
+    "book_id": None,
+    "loop": None,
+    "task": None
+}
+task_lock = threading.Lock()
+
+# 定义全局变量存储定时器与端口转发 Server 任务
+auto_stop_timer = None
+timer_lock = threading.Lock()
+forwarding_servers = []  # 存储端口转发服务器实例
+
+def auto_stop_task():
+    """后台延时执行的关闭函数"""
+    global auto_stop_timer
+    try:
+        print("⏰ 30分钟倒计时已到，正在自动停止 Cpolar 隧道及端口转发...")
+        stop_port_forwarding()  # 停止端口转发
+        asyncio.run(stop_tunnel(auth_file="cpauth.json", name="worker"))
+        msg = "Cpolar 隧道及端口转发已在运行 30 分钟后自动停止"
+        PerseusNotifyMsg(msg, "")
+    except Exception as e:
+        print(f"❌ Cpolar 自动停止异常: {e}")
+        PerseusErrorMsg("Cpolar 自动停止异常", str(e))
+    finally:
+        with timer_lock:
+            auto_stop_timer = None
+
+def cancel_existing_timer():
+    """取消已存在的定时器"""
+    global auto_stop_timer
+    with timer_lock:
+        if auto_stop_timer is not None:
+            auto_stop_timer.cancel()
+            auto_stop_timer = None
+
+# ==================== 端口转发的核心逻辑 ====================
+
+async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """处理传入的 HTTP 连接，根据路径前缀路由分发至对应本地端口"""
+    try:
+        # 读取 HTTP 请求头（最多 8KB）
+        header_data = await reader.read(8192)
+        if not header_data:
+            writer.close()
+            await writer.wait_closed()
+            return
+
+        request_str = header_data.decode('utf-8', errors='ignore')
+        first_line = request_str.split('\r\n')[0] if '\r\n' in request_str else ""
+        parts = first_line.split(' ')
+
+        if len(parts) < 2:
+            writer.close()
+            await writer.wait_closed()
+            return
+
+        path = parts[1]
+
+        # 1. 规则 1: /bot/push 拦截拒收 (返回 403)
+        if path.startswith("/bot/push"):
+            response = b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nForbidden"
+            writer.write(response)
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            return
+
+        # 2. 规则 2: 根据路径判断转发目标端口
+        if path.startswith("/api/") or path.startswith("/assets/"):
+            target_port = 25567
+        else:
+            target_port = 22267
+
+        # 3. 建立与本地目标端口的连接并直接透传数据
+        target_reader, target_writer = await asyncio.open_connection('127.0.0.1', target_port)
+        
+        # 将原始 Header 直接发给目标服务器
+        target_writer.write(header_data)
+        await target_writer.drain()
+
+        # 建立双向流量透传管线
+        async def pipe(src_reader, dst_writer):
+            try:
+                while True:
+                    data = await src_reader.read(4096)
+                    if not data:
+                        break
+                    dst_writer.write(data)
+                    await dst_writer.drain()
+            except Exception:
+                pass
+            finally:
+                try:
+                    dst_writer.close()
+                    await dst_writer.wait_closed()
+                except Exception:
+                    pass
+
+        await asyncio.gather(
+            pipe(reader, target_writer),
+            pipe(target_reader, writer),
+            return_exceptions=True
+        )
+
+    except Exception:
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+def start_port_forwarding(port=25568):
+    """在后台独立线程中启动 25568 监听任务"""
+    stop_port_forwarding()  # 启动前先确保旧的已关闭
+
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def main():
+            server = await asyncio.start_server(handle_client, '0.0.0.0', port)
+            forwarding_servers.append((server, loop))
+            async with server:
+                await server.serve_forever()
+
+        try:
+            loop.run_until_complete(main())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=run_loop, daemon=True)
+    t.start()
+    print(f"🚀 端口转发服务已在 0.0.0.0:{port} 启动")
+
+def stop_port_forwarding():
+    """停止并关闭端口转发服务器"""
+    global forwarding_servers
+    for server, loop in forwarding_servers:
+        try:
+            server.close()
+            loop.call_soon_threadsafe(loop.stop)
+        except Exception as e:
+            print(f"关闭端口转发服务出错: {e}")
+    forwarding_servers.clear()
+    print("🛑 端口转发服务已关闭")
+
 
 def is_admin():
     """检查当前进程是否具有管理员权限"""
@@ -625,6 +782,205 @@ def handle_music_stop():
             "message": f"MusicDL 终止失败: {str(e)}"
         }, 500)
 
+# ==================== 新增：Cpolar 控制路由 ====================
+
+@app.route("/cp/start", methods=["GET", "POST"])
+def handle_cp_start():
+    """接收 /cp/start 请求：启动隧道、开启端口转发并等待公网地址上线，设置 30 分钟自动关闭"""
+    global auto_stop_timer
+    try:
+        # 1. 启动本地 25568 端口转发路由任务
+        start_port_forwarding(25568)
+
+        # 2. 使用 asyncio.run 驱动异步独立函数
+        success = asyncio.run(start_tunnel(auth_file="cpauth.json", name="worker", wait_online=True))
+        if success:
+            urls = asyncio.run(query_public_urls(auth_file="cpauth.json", name="worker"))
+            
+            # 先取消之前的定时器
+            cancel_existing_timer()
+            
+            # 设置 30 分钟 (1800 秒) 自动停止定时器
+            with timer_lock:
+                auto_stop_timer = threading.Timer(1800, auto_stop_task)
+                auto_stop_timer.daemon = True
+                auto_stop_timer.start()
+
+            msg = f"Cpolar 隧道启动成功，当前公网地址: {urls} (将在 30 分钟后自动关闭)"
+            PerseusNotifyMsg(msg, "")
+            PerseusNotifyMsg(f"\n Alas:\n {urls[0]} \n Bot \n{urls[0]+"/assets/index.html"}","")
+            return format_response({"status": "ok", "message": msg, "urls": urls}, 200)
+        else:
+            stop_port_forwarding()  # 启动失败时回滚端口转发
+            PerseusWarningMsg(str({"status": "error", "message": "Cpolar 隧道启动失败或未响应"}),"")
+            return format_response({"status": "error", "message": "Cpolar 隧道启动失败或未响应"}, 500)
+    except Exception as e:
+        stop_port_forwarding()  # 发生异常时回滚端口转发
+        print(f"❌ Cpolar 启动异常: {e}")
+        PerseusErrorMsg("Cpolar 启动异常", str(e))
+        return format_response({"status": "error", "message": f"Cpolar 启动失败: {str(e)}"}, 500)
+
+@app.route("/cp/stop", methods=["GET", "POST"])
+def handle_cp_stop():
+    """接收 /cp/stop 请求：停止隧道并结束端口转发任务"""
+    try:
+        # 1. 取消倒计时定时器
+        cancel_existing_timer()
+
+        # 2. 关闭端口转发任务
+        stop_port_forwarding()
+
+        # 3. 关闭 Cpolar 隧道
+        asyncio.run(stop_tunnel(auth_file="cpauth.json", name="worker"))
+        msg = "Cpolar 隧道及端口转发已成功停止"
+        PerseusNotifyMsg(msg, "")
+        return format_response({"status": "ok", "message": msg}, 200)
+    except Exception as e:
+        print(f"❌ Cpolar 停止异常: {e}")
+        PerseusErrorMsg("Cpolar 停止异常", str(e))
+        return format_response({"status": "error", "message": f"Cpolar 停止失败: {str(e)}"}, 500)
+
+@app.route("/cp/get", methods=["GET", "POST"])
+def handle_cp_get():
+    """接收 /cp/get 请求：单纯查询当前公网地址"""
+    try:
+        urls = asyncio.run(query_public_urls(auth_file="cpauth.json", name="worker"))
+        PerseusNotifyMsg(str(urls),"")
+        return format_response({"status": "ok", "urls": urls}, 200)
+    except Exception as e:
+        print(f"❌ Cpolar 地址获取异常: {e}")
+        return format_response({"status": "error", "message": f"获取公网地址失败: {str(e)}"}, 500)
+
+
+# 太好了，是LK，我们没救了
+@app.route("/lk/<book_id>", methods=["GET", "POST"])
+def handle_lk_crawl(book_id):
+    req_data = {}
+
+    # 第一层 try：解析请求参数
+    try:
+        req_data.update(request.args.to_dict())
+        req_data.update(request.form.to_dict())
+        if request.is_json:
+            json_data = request.get_json(silent=True)
+            if json_data and isinstance(json_data, dict):
+                req_data.update(json_data)
+
+        print("\n========================================")
+        print(f"【/lk/{book_id} 收到消息】内容：")
+        print(json.dumps(req_data, ensure_ascii=False, indent=4))
+        print("========================================\n")
+
+        # 第二层 try：独占控制与开启后台线程
+        try:
+            str_book_id = str(book_id)
+
+            with task_lock:
+                # 检查是否存在正在运行的任务
+                if current_task["task"] is not None and not current_task["task"].done():
+                    running_id = current_task["book_id"]
+                    
+                    # 相同 ID：不重复启动
+                    if running_id == str_book_id:
+                        return format_response({
+                            "status": "warning", 
+                            "message": f"book_id: {str_book_id} 已经在运行中，请勿重复发起"
+                        }, 200)
+                    
+                    # 不同 ID：先停止正在运行的旧任务
+                    print(f"【检测到新任务】自动取消旧任务 book_id: {running_id}")
+                    old_loop = current_task["loop"]
+                    old_task = current_task["task"]
+                    if old_loop and old_task:
+                        old_loop.call_soon_threadsafe(old_task.cancel)
+
+            # 任务执行体
+            def async_task():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                async_job = loop.create_task(
+                    crawl_lightnovel_to_epub(
+                        book_id=str_book_id,
+                        headless=True,
+                        force_redownload_images=False,
+                    )
+                )
+
+                # 更新全局独占句柄
+                with task_lock:
+                    current_task["book_id"] = str_book_id
+                    current_task["loop"] = loop
+                    current_task["task"] = async_job
+
+                try:
+                    run_result = loop.run_until_complete(async_job)
+                    PerseusNotifyMsg(str(run_result), "")
+                except asyncio.CancelledError:
+                    print(f"【后台任务已被手动/抢占终止】book_id: {str_book_id}")
+                    PerseusNotifyMsg(f"book_id {str_book_id} 任务已终止", "")
+                except Exception as inner_e:
+                    print(f"【后台异步任务执行失败】: {inner_e}")
+                    PerseusNotifyMsg(f"爬取失败: {inner_e}", "")
+                finally:
+                    # 运行结束或中断后，清理当前独占记录
+                    with task_lock:
+                        if current_task["book_id"] == str_book_id:
+                            current_task["book_id"] = None
+                            current_task["loop"] = None
+                            current_task["task"] = None
+                    loop.close()
+
+            # 启动独立线程
+            thread = threading.Thread(target=async_task)
+            thread.daemon = True
+            thread.start()
+
+        except Exception as task_e:
+            print(f"【创建/启动异步线程失败】: {task_e}")
+            return format_response(
+                {"status": "error", "message": f"开启异步任务失败: {task_e}"}, 500
+            )
+
+    except Exception as req_e:
+        print(f"【请求参数解析失败】: {req_e}")
+        return format_response(
+            {"status": "error", "message": f"请求解析异常: {req_e}"}, 400
+        )
+
+    # 及时返回
+    return format_response(
+        {"status": "success", "message": f"已成功提交后台任务，book_id: {book_id}"}, 200
+    )
+
+
+@app.route("/lk/stop", methods=["GET", "POST"])
+def handle_lk_stop():
+    """直接结束当前正在运行的任务"""
+    try:
+        with task_lock:
+            running_id = current_task["book_id"]
+            loop = current_task["loop"]
+            task = current_task["task"]
+
+            if task is None or task.done():
+                return format_response(
+                    {"status": "info", "message": "当前没有正在运行的爬取任务"}, 200
+                )
+
+            # 触发异步取消
+            loop.call_soon_threadsafe(task.cancel)
+
+        return format_response(
+            {"status": "success", "message": f"已成功发送停止信号，结束任务 book_id: {running_id}"}, 200
+        )
+
+    except Exception as e:
+        print(f"【停止任务失败】: {e}")
+        return format_response(
+            {"status": "error", "message": f"停止任务操作异常: {e}"}, 500
+        )
+
 
 def main():
     request_admin_privileges(max_retries=5)
@@ -637,10 +993,7 @@ def main():
         f"服务已成功绑定端口 {LISTEN_PORT} 并开始监听请求。"
     )
     print(f"访问地址示例：http://127.0.0.1:{LISTEN_PORT}/push")
-    print(f"QBot 启动地址：http://127.0.0.1:{LISTEN_PORT}/bot/start")
-    print(f"QBot 关闭地址：http://127.0.0.1:{LISTEN_PORT}/bot/shutdown")
-    print(f"Music 启动地址：http://127.0.0.1:{LISTEN_PORT}/music/start")
-    print(f"Music 关闭地址：http://127.0.0.1:{LISTEN_PORT}/music/stop")
+    print("Server,启动启动启动")
     app.run(host="0.0.0.0", port=LISTEN_PORT, debug=False)
 
 if __name__ == "__main__":
