@@ -1,3 +1,4 @@
+import zPerseusLogger
 import asyncio
 import re
 import os
@@ -8,6 +9,7 @@ import urllib3
 from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 from ebooklib import epub
+import zBarkCustom
 
 # 禁用 requests/urllib3 的 SSL 警告提示
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -134,7 +136,7 @@ async def safe_goto(page, url, retries=3):
     for attempt in range(retries):
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(10000)
             return True
         except Exception as e:
             print(f"  [!] 加载页面失败 ({attempt + 1}/{retries}): {url} -> {e}")
@@ -293,7 +295,6 @@ async def crawl_lightnovel_to_epub(book_id: str = None, output_dir: str = ".", h
 
             if not chapters:
                 continue
-
             print(f"\n================ 开始处理分卷: {vol_name} ================")
             
             book = epub.EpubBook()
@@ -451,6 +452,7 @@ async def crawl_lightnovel_to_epub(book_id: str = None, output_dir: str = ".", h
             out_name = os.path.join(output_dir, f"{sanitize_filename(book_title)}_{sanitize_filename(vol_name)}.epub")
             epub.write_epub(out_name, book, {})
             print(f"[✓] 成功合成 EPUB 文件: {out_name}")
+            zBarkCustom.PerseusNotifyMsg(f"[✓] 成功合成 EPUB 文件{out_name[0]}","")
             saved_files.append(out_name)
 
         await browser.close()
@@ -459,6 +461,4 @@ async def crawl_lightnovel_to_epub(book_id: str = None, output_dir: str = ".", h
 if __name__ == "__main__":
     import sys
     bid = sys.argv[1] if len(sys.argv) > 1 else None
-    #asyncio.run(crawl_lightnovel_to_epub(bid, headless=False, force_redownload_images=False))
-
     asyncio.run(crawl_lightnovel_to_epub("", headless=False,force_redownload_images=False))
