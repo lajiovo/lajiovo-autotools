@@ -21,7 +21,7 @@ from opcmd import handle_op_command
 from server import start_http_servers
 
 # ------------------- 文件配置区 -------------------
-TARGET_BOT_PREFIX = "<@3DAF97B3287EC992B7389C79EEDD2261>"
+TARGET_BOT_PREFIX = "<@>"
 # --------------------------------------------------
 
 apply_sdk_patch()
@@ -120,18 +120,28 @@ class MyClient(botpy.Client):
 
   # ------------------- SERVER 专供对外调用接口 -------------------
   async def api_send_c2c_text(self, user_openid: str, content: str):
-    """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录"""
-    await self.send_c2c_text(user_openid=user_openid, content=content)
-    self.chat_mgr.append_private_message(
-        user_id=user_openid, content=content, role="bot"
-    )
+    """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录（含异常捕获）"""
+    try:
+      await self.send_c2c_text(user_openid=user_openid, content=content)
+      self.chat_mgr.append_private_message(
+          user_id=user_openid, content=content, role="bot"
+      )
+      return True
+    except Exception as e:
+      _log.error(f"❌ [Server 发送 C2C 消息被拒收/报错] UserOpenID: {user_openid}, 原因: {e}")
+      return False
 
   async def api_send_group_text(self, group_openid: str, content: str):
-    """供 Server 调用的主动发送群聊纯文本消息接口，并同步写入聊天记录"""
-    await self.send_group_text(group_openid=group_openid, content=content)
-    self.chat_mgr.append_group_message(
-        group_id=group_openid, user_id="BOT", content=content, role="bot"
-    )
+    """供 Server 调用的主动发送群聊纯文本消息接口，并同步写入聊天记录（含异常捕获）"""
+    try:
+      await self.send_group_text(group_openid=group_openid, content=content)
+      self.chat_mgr.append_group_message(
+          group_id=group_openid, user_id="BOT", content=content, role="bot"
+      )
+      return True
+    except Exception as e:
+      _log.error(f"❌ [Server 发送 Group 消息被拒收/报错] GroupOpenID: {group_openid}, 原因: {e}")
+      return False
 
   def get_chat_history(self, target_id: str, is_group: bool = False):
     """获取指定群或用户的聊天历史记录"""
@@ -503,15 +513,27 @@ class MyClient(botpy.Client):
       )
       return
 
+    full_content = f"{msg_content}{warning_msg}"
+
+    # 1. 【第一次记录】收到 Push 请求，准备发送前记录一次
+    self.chat_mgr.append_group_message(
+        group_id="push",
+        user_id="bot",
+        content=f"[Push 接收] {full_content}",
+        role="push",
+    )
+
     try:
       await self.api.post_group_message(
           group_openid=target_openid,
           msg_type=0,
-          content=f"{msg_content}{warning_msg}",
+          content=full_content,
       )
       _log.info(f"📢 [推送成功] OpenID: {target_openid}")
+
     except Exception as e:
-      _log.error(f"❌ 推送消息失败: {e}")
+      _log.error(f"❌ 推送消息被拒收/失败: {e}")
+
 
   def handle_op_command(
       self,
