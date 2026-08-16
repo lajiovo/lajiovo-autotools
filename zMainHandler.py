@@ -4,13 +4,19 @@ import zAlas
 import zMumu
 import zPlaywright
 import zPGRJZ
-from zBarkCustom import PerseusErrorMsg, PerseusWarningMsg
+import re
+from zBarkCustom import PerseusErrorMsg, PerseusWarningMsg,PerseusNotifyMsg
 
 def run_alas_mumu_check():
     """
     通用检查与恢复函数
     按 ["check", "start", "wait", "check", "update"] 顺序执行 Playwright 操作并根据返回状态自动恢复。
     """
+    # 0. 初始检测：若 MuMu 未运行，则拉起并隐藏（不计数）
+    if not zMumu.is_mumu_running():
+        print("[Info] 检测到 MuMu 未运行，正在启动并隐藏 MuMu...")
+        zMumu.hidemumu()
+
     alas_soft_restart_count = 0  # Alas 软重启 (Playwright ["restart"]) 计数
     alas_hard_restart_count = 0  # Alas 硬重启 (cleanup + start) 计数
     mumu_restart_count = 0       # MuMu 重启计数
@@ -214,6 +220,40 @@ def Handlepush(msg_dict: dict):
                     print("[执行动作] 清理并重启隐藏 MuMu 模拟器...")
                     zMumu.mumu_kill()
                     zMumu.hidemumu()
+                    zPlaywright.main(task_list=["start"])
+
+                    print("[执行动作] 调用 Alas & MuMu 检查恢复流程...")
+                    if not run_alas_mumu_check():
+                        print("[修复结果] ❌ 模拟器拉起/修复失败")
+                        PerseusErrorMsg(
+                            "Emulator Recovery Failed",
+                            f"Failed to restart emulator. Manual intervention required.{raw_msg}",
+                        )
+                        return False
+                    else:
+                        print("[修复结果] 模拟器已成功拉起并修复！")
+                        PerseusNotifyMsg(
+                            "Emulator Recovered",
+                            f"Emulator successfully restarted and running.{raw_msg}",
+                        )
+                elif (
+                    "模拟器离线" in body
+                    or "正在尝试重启模拟器" in body
+                ):
+                    """
+                    AzurPilot <alas> 警告
+                    <alas> 模拟器离线 - 正在尝试重启模拟器
+                    """
+                    print(" -> 触发机制:模拟器离线")
+                    PerseusWarningMsg(
+                        "Emulator offline",
+                        f"Emulator error detected. Restarting emulator and checking status...{raw_msg}",
+                    )
+
+                    print("[执行动作] 清理并重启隐藏 MuMu 模拟器...")
+                    zMumu.mumu_kill()
+                    zMumu.hidemumu()
+                    zPlaywright.main(task_list=["start"])
 
                     print("[执行动作] 调用 Alas & MuMu 检查恢复流程...")
                     if not run_alas_mumu_check():
@@ -330,7 +370,6 @@ def parse_task_list(arg):
 
     return default_list
 
-
 def handlerun(data: dict):
     """
     用于处理 /run 收到的指令数据
@@ -344,6 +383,9 @@ def handlerun(data: dict):
         if "ikun" in task:
             res = run_alas_mumu_check()
             return [True, f"run_alas_mumu_check() -> {res}"]
+        elif "admin" in task:
+            res = zAlas.is_admin()
+            return [True, f"zAlas.is_admin() -> {res}"]
 
         # 1. 处理 Alas 相关任务
         elif "alas" in task:
@@ -361,7 +403,7 @@ def handlerun(data: dict):
                 res = zAlas.hide()
                 return [True, f"zAlas.hide() -> {res}"]
             elif "online" in task:
-                res = zAlas.is_process_running()
+                res = zAlas.is_site_accessible()
                 return [True, f"zAlas.is_process_running() -> {res}"]
 
         # 2. 处理 MuMu 相关任务
@@ -399,3 +441,8 @@ def handlerun(data: dict):
         return [False, f"Handlerun Error ({error_type}): {error_detail}"]
 
     return [False, f"Unknown Task: {data.get('task')}"]
+
+
+if __name__ == "__main__":
+    Handlepush({"title":"AzurPilot <alas> 委托获得顶级奖励喵！",
+                "body":"本次获得钻石 * 20今.日累计: 20本周累计: 95本月累计: 20"})
