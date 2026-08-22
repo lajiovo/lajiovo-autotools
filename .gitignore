@@ -5,20 +5,17 @@ logs/
 .vs/
 .vscode/
 __pycache__/
-QBot/
 QBot2/
+botdata/
 
 # 2. 忽略特定扩展名的文件
 *.log
-*.tmp
-*.exe
-*.yaml
-*.bat
-*.pyw
-*.vbs
-*.json
-*.md
 
 # 3. 忽略特定文件
 last_checkin.txt
+Begin.bat
+config.yaml
+pgrjzauth.json
+auth.json
+key.json
 .env

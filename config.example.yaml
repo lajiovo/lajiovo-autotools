@@ -1,0 +1,186 @@
+# ==================== zAlas ====================
+alas:
+  # Alas 启动器路径
+  alas_path: "D:\\???\\AzurPilot\\alas-launcher.exe"
+  # 目标进程名称
+  target_process: "alas-launcher.exe"
+  # 目标窗口标题
+  target_title: "AzurPilot"
+
+# ==================== zBarkCustom ====================
+bark:
+  # 设备 Key 列表
+  key_list:
+    - ""
+  alarm: "alarm"
+  # 提示音效
+  normal: "alarm"
+  # icon
+  icon1: "https://patchwiki.biligame.com/images/blhx/0/05/3bi61qmjssvlemdug8rag683vcj2ziy.png"
+  icon2: "https://patchwiki.biligame.com/images/blhx/0/0f/m5rycu93qc94r5lyst8862wnbvehjle.png"
+  icon3: "https://patchwiki.biligame.com/images/blhx/9/9a/onh0ri4tx1wjuhhtxegjqqcobv7wdjc.png"
+
+# ==================== BanMuMu 屏蔽/清理配置 ====================
+banmumu:
+  # 需要清理的文件夹配置
+  folder_targets:
+    dir: "C:\\Users\\???\\AppData\\Roaming\\Netease\\MuMuPlayer\\data"
+    items:
+      - "ProgramAds"
+      - "startupImage"
+      - "msgCenter"
+
+  # 需要处理的文件配置
+  file_targets:
+    dir: "D:\\???\\Mumu'sFloder\\MuMuPlayer\\nx_main"
+    items:
+      - "MuMuNxService.exe"
+      - "MuMuNxUpdater.exe"
+      - "MumuRemoteHealthd.exe"
+
+  # 需要停止并禁用的系统服务
+  service_name: "MuMuRemoteService"
+
+# ==================== Cpolar 内网穿透配置 ====================
+cpolar:
+  # Cpolar 安装目录
+  dir: "D:\\???\\cpolar'sFloder'"
+
+  # Cpolar Authtoken (若已在命令行配置过可留空)
+  authtoken: ""
+
+# ==================== FFmpeg 音频处理配置 ====================
+ffmpeg:
+  # 路径配置
+  paths:
+    # 源文件目录
+    src_dir: "D:\\???\\musicdl'sFloder\\data\\downloads"
+    # 目标文件目录
+    dst_dir: "D:\\???\\Music"
+
+  # 音频处理参数
+  audio:
+    # 音频滤镜参数
+    filter: "loudnorm=I=-50:LRA=11:TP=-1.5, dynaudnorm"
+    # 输出比特率
+    bitrate: "64k"
+
+# ==================== LK (轻小说) 配置 ====================
+lk:
+  # 基础配置
+  site:
+    # iPhone 15 屏幕分辨率
+    viewport:
+      width: 393
+      height: 852
+    # 目标域名
+    domain: "https://www.lightnovel.fun"
+    # 认证文件路径
+    auth_file: "lkauth.json"
+    # 缓存目录
+    cache_dir: "lkache"
+
+  # 网络与代理配置
+  network:
+    # Shadowrocket 代理服务器
+    proxy_server: "http://192.168.10.8:1082"
+
+# ==================== MuMu 模拟器配置 ====================
+mumu:
+  # 路径配置
+  paths:
+    # MuMu 主程序路径
+    main_path: "D:\\???\\Mumu'Floder\\MuMuPlayer\\nx_main\\MuMuNxMain.exe"
+    # MuMu 实例设备路径
+    device_path: "D:\\???\\Mumu'Floder\\MuMuPlayer\\nx_device\\12.0\\shell\\MuMuNxDevice.exe"
+
+  # 窗口控制配置
+  window:
+    # 是否隐藏窗口控制 (True = 隐藏启动, False = 正常显示启动)
+    hide_mumu: false
+
+  # 运行与检测参数设置
+  runtime:
+    # 窗口检测循环的最少持续时间区间（秒）
+    loop_min_duration_max: 20
+    loop_min_duration_min: 10
+    # 严格检测间隔时间（秒）
+    check_interval: 2
+    # 尝试隐藏超时限制（秒）
+    hide_timeout: 30
+    # 最多尝试次数（初始 1 次 + kill 后重试 1 次）
+    max_attempts: 2
+
+# ==================== MusicDL 网络代理/监听配置 ====================
+musicdl:
+  network:
+    # 目标地址（本地绑定的应用）
+    target_host: "127.0.0.1"
+    target_port: 37777
+
+    # 对局域网开放的监听地址和端口
+    listen_host: "0.0.0.0"
+    listen_port: 37777
+
+# ==================== PushServer 配置 ====================
+pushserver:
+  # 监听端口
+  listen_port: 25566
+
+  # QBot 相关配置
+  qbot:
+    # Python 后台运行环境 (pythonw.exe) 路径
+    pythonw_path: "C:\\Users\\???\\AppData\\Local\\Programs\\Python\\Python314\\pythonw.exe"
+    # QBot 主脚本路径
+    script_path: "D:\\???\\Perseus\\QBot\\main.py"
+    # 专用的精准识别标记（写在命令行参数中）
+    identifier: "--PERSEUS_QBOT_INSTANCE"
+
+  # MusicDL 配置
+  music:
+    # MusicDL 桌面程序路径
+    exe_path: "D:\\???\\musicdl'Floder\\music-dl-desktop-rust.exe"
+    # 服务端口
+    port: 37777
+
+# ==================== Logger 日志配置 ====================
+logger:
+  # 指定日志文件夹名称
+  log_dir: "logs"
+  # 主日志文件名
+  log_file_name: "app.log"
+  # 单个文件最大大小 (单位: 字节, 512KB = 512 * 1024)
+  max_bytes: 524288
+  # 最多保留分卷备份数量
+  backup_count: 20
+
+# ==================== Bot 机器人配置 ====================
+bot:
+  # 应用 ID
+  app_id: "xxx"
+  # 应用密钥
+  app_secret: "xxx"
+  # 默认 op
+  default_op: "xxx"
+  # 机器人艾特前缀标识
+  target_bot_prefix: "<@xxx>"
+
+  opcmd:
+    # 预设日志路径列表
+    preset_log_paths:
+      - "D:\\???\\AzurPilot\\log"
+      - "D:\\???\\Perseus\\logs"
+      - "D:\\???\\Perseus\\QBot"
+
+    # Alas 错误日志专有路径
+    alas_error_log_path: "D:\\???\\AzurPilot\\log\\error\\alas"
+
+    beginvbs: "D:\\???\\Perseus\\begin.vbs"
+
+    # 需要被掩码隐藏的敏感路径字符串列表
+    sensitive_patterns:
+    - "D:\\???"
+    - "D:/???"
+    
+    # 替换后的掩码字符串
+    mask_replacement: "D:\\***"
