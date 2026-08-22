@@ -1,179 +1,178 @@
+import os
+import re
+import time
 import json
 import asyncio
+import threading
+import subprocess
+import urllib.request
 from typing import List, Optional
-from playwright.async_api import async_playwright, Page, BrowserContext, Browser
 
-# ================= 核心工具函数 =================
+CPOLAR_DIR = r"xxxx"
+CPOLAR_EXE = os.path.join(CPOLAR_DIR, "cpolar.exe")
 
-async def _init_browser(auth_file: str, name: str):
-    """内部辅助函数：初始化浏览器并注入身份凭据"""
-    headless = (name != "main")
-    playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=headless)
-    context = await browser.new_context()
-    page = await context.new_page()
+# 填入你的 cpolar authtoken（如果已经通过 CMD 运行过 cpolar authtoken xxxx，这里留空即可）
+AUTHTOKEN = "xxxx" 
 
+_cpolar_process: Optional[subprocess.Popen] = None
+_output_logs: List[str] = []
+
+
+def _clean_ansi(text: str) -> str:
+    ansi_regex = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_regex.sub('', text)
+
+
+def _reader_thread(pipe):
+    global _output_logs
     try:
-        with open(auth_file, "r", encoding="utf-8") as f:
-            auth_data = json.load(f)
-            if isinstance(auth_data, list):
-                await context.add_cookies(auth_data)
-            elif isinstance(auth_data, dict):
-                if "cookies" in auth_data:
-                    await context.add_cookies(auth_data["cookies"])
-                if "origins" in auth_data:
-                    await context.add_init_script(f"""
-                        const storage = {json.dumps(auth_data)};
-                        if (storage.origins) {{
-                            storage.origins.forEach(o => {{
-                                o.localStorage.forEach(item => {{
-                                    localStorage.setItem(item.name, item.value);
-                                }});
-                            }});
-                        }}
-                    """)
+        while True:
+            chunk = pipe.read(512)
+            if not chunk:
+                break
+            cleaned = _clean_ansi(chunk)
+            _output_logs.append(cleaned)
+    except Exception:
+        pass
+
+
+def _get_urls_from_api() -> List[str]:
+    api_url = "http://127.0.0.1:4040/api/tunnels"
+    try:
+        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=1) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            urls = []
+            for tunnel in data.get("tunnels", []):
+                public_url = tunnel.get("public_url")
+                if public_url:
+                    urls.append(public_url)
+            return list(set(urls))
+    except Exception:
+        return []
+
+
+def bind_authtoken_if_needed(token: str):
+    """防止未认证导致隧道启动失败"""
+    if not token:
+        return
+    try:
+        cmd = [CPOLAR_EXE, "authtoken", token]
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        subprocess.run(cmd, cwd=CPOLAR_DIR, creationflags=creationflags, timeout=5)
+        print("[cpolar] Authtoken 配置完成。")
     except Exception as e:
-        print(f"[Warning] 加载凭据文件 {auth_file} 失败或文件不存在: {e}")
-
-    return playwright, browser, context, page
-
-async def _wait_loading(page: Page, timeout: int = 10000):
-    """内部辅助函数：等待 Element UI loading 遮罩消失"""
-    mask = page.locator(".el-loading-mask")
-    if await mask.count() > 0:
-        await mask.first.wait_for(state="hidden", timeout=timeout)
-
-async def _close_browser(playwright, browser, context):
-    """内部辅助函数：关闭浏览器环境"""
-    if context:
-        await context.close()
-    if browser:
-        await browser.close()
-    if playwright:
-        await playwright.stop()
+        print(f"[Warning] 配置 Authtoken 失败: {e}")
 
 
-# ================= 业务独立函数 =================
+def start_cpolar_tunnel(port: int = 25568, timeout: int = 15) -> List[str]:
+    global _cpolar_process, _output_logs
+    _output_logs.clear()
 
-async def query_public_urls(
-    auth_file: str = "cpauth.json", 
-    name: str = "worker", 
-    proto_filter: Optional[str] = None,
-    base_url: str = "http://127.0.0.1:9200"
-) -> List[str]:
-    """
-    【独立函数】单纯查询公网地址列表
-    :param auth_file: 凭据路径
-    :param name: 为 'main' 时不隐藏界面 (headless=False)
-    :param proto_filter: 协议过滤，可选 'http' / 'https' / 'tcp'，传 None 返回全部
-    :param base_url: cpolar 本地控制台地址
-    :return: 公网 URL 字符串列表
-    """
-    playwright, browser, context, page = await _init_browser(auth_file, name)
-    urls = []
+    stop_cpolar_tunnel()
+
+    if not os.path.exists(CPOLAR_EXE):
+        print(f"[Error] 找不到 cpolar.exe: {CPOLAR_EXE}")
+        return []
+
+    # 如果配置了 token 则自动绑定
+    bind_authtoken_if_needed(AUTHTOKEN)
+
+    # 带上 --log=stdout 强制让 cpolar 把日志写到标准输出流中，便于正则抓取
+    cmd = [CPOLAR_EXE, "http", str(port), "--log=stdout"]
+    print(f"[cpolar] 正在后台静默启动隧道: {' '.join(cmd)}")
+
     try:
-        await page.goto(f"{base_url.rstrip('/')}/#/status/online")
-        await _wait_loading(page)
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
 
-        # 检查是否为 No Data 空列表
-        if not await page.locator(".el-table__empty-block").is_visible():
-            rows = page.locator(".el-table__body-wrapper tbody tr.el-table__row")
-            count = await rows.count()
+        _cpolar_process = subprocess.Popen(
+            cmd,
+            cwd=CPOLAR_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            bufsize=0,
+            encoding="utf-8",
+            errors="ignore",
+            creationflags=creationflags
+        )
+        print(f"[DEBUG Process] cpolar 已后台启动，PID: {_cpolar_process.pid}")
+    except Exception as e:
+        print(f"[Error] 启动进程失败: {e}")
+        return []
 
-            for i in range(count):
-                row = rows.nth(i)
-                cols = row.locator("td")
-                url = (await cols.nth(2).inner_text()).strip()
-                proto = (await cols.nth(3).inner_text()).strip().lower()
+    t = threading.Thread(target=_reader_thread, args=(_cpolar_process.stdout,), daemon=True)
+    t.start()
 
-                if proto_filter is None or proto == proto_filter.lower():
-                    urls.append(url)
-    finally:
-        await _close_browser(playwright, browser, context)
+    urls = []
+    start_time = time.time()
+    url_pattern = re.compile(r"https?://[a-zA-Z0-9.-]+\.cpolar\.[a-zA-Z0-9]+")
+
+    print("[cpolar] 等待隧道建立并抓取地址...")
+
+    while time.time() - start_time < timeout:
+        if _cpolar_process.poll() is not None:
+            print(f"[DEBUG Process Exit] cpolar 进程提前退出，退出码: {_cpolar_process.poll()}")
+            break
+
+        # 1. 查询 4040 API
+        api_urls = _get_urls_from_api()
+        if api_urls:
+            print(f"[cpolar] [成功] 通过 API 获取到公网地址: {api_urls}")
+            return api_urls
+
+        # 2. 从控制台日志抓取
+        full_log = "".join(_output_logs)
+        matches = url_pattern.findall(full_log)
+        for u in matches:
+            if u not in urls:
+                urls.append(u)
+
+        if urls:
+            print(f"[cpolar] [成功] 从控制台日志捕获到公网地址: {urls}")
+            return urls
+
+        time.sleep(0.5)
+
+    if not urls:
+        print("[Warning] 未能捕获到公网地址。")
+        if _output_logs:
+            print(f"[DEBUG 内部日志捕获]:\n{''.join(_output_logs)}")
 
     return urls
 
 
-async def start_tunnel(
-    auth_file: str = "cpauth.json", 
-    name: str = "worker", 
-    wait_online: bool = True,
-    base_url: str = "http://127.0.0.1:9200"
-) -> bool:
-    """
-    【独立函数】启动隧道
-    :param wait_online: 是否在启动后自动确认公网地址上线
-    :return: 启动成功或已被点击返回 True
-    """
-    playwright, browser, context, page = await _init_browser(auth_file, name)
-    success = False
+def stop_cpolar_tunnel() -> bool:
+    global _cpolar_process
+
+    if _cpolar_process is not None:
+        try:
+            _cpolar_process.terminate()
+            _cpolar_process.wait(timeout=2)
+        except Exception:
+            pass
+        _cpolar_process = None
+
     try:
-        await page.goto(f"{base_url.rstrip('/')}/#/tunnels/list")
-        await _wait_loading(page)
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "cpolar.exe"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            shell=True
+        )
+        print("[cpolar] 已清理 cpolar 进程。")
+        return True
+    except Exception as e:
+        print(f"[Error] 清理进程失败: {e}")
+        return False
 
-        btn = page.locator("button.el-button--success:has-text('启动')").first
-        if await btn.is_visible():
-            await btn.click()
-            await _wait_loading(page)
-            success = True
-
-        # 如果需要确认上线，轮询等待状态页刷新出链接
-        if success and wait_online:
-            for _ in range(15):
-                await page.goto(f"{base_url.rstrip('/')}/#/status/online")
-                await _wait_loading(page)
-                if not await page.locator(".el-table__empty-block").is_visible():
-                    break
-                await asyncio.sleep(1)
-    finally:
-        await _close_browser(playwright, browser, context)
-
-    return success
-
-
-async def stop_tunnel(
-    auth_file: str = "cpauth.json", 
-    name: str = "worker", 
-    base_url: str = "http://127.0.0.1:9200"
-) -> bool:
-    """
-    【独立函数】停止隧道
-    :return: 停止成功或已被点击返回 True
-    """
-    playwright, browser, context, page = await _init_browser(auth_file, name)
-    success = False
-    try:
-        await page.goto(f"{base_url.rstrip('/')}/#/tunnels/list")
-        await _wait_loading(page)
-
-        btn = page.locator("button.el-button--primary:has-text('停止')").first
-        if await btn.is_visible():
-            await btn.click()
-            await _wait_loading(page)
-            success = True
-    finally:
-        await _close_browser(playwright, browser, context)
-
-    return success
-
-
-# ================= 使用测试 =================
 
 async def main():
-    # 1. 单纯查询公网地址 (指定 name="main" 可以弹窗看过程，不传或传其他则静默)
-    urls = await query_public_urls(auth_file="cpauth.json", name="main")
-    print("当前公网地址列表:", urls)
-
-    # 2. 如果无地址，启动隧道
-    if not urls:
-        print("未检测到公网地址，启动隧道中...")
-        is_started = await start_tunnel(auth_file="cpauth.json", name="main", wait_online=True)
-        if is_started:
-            new_urls = await query_public_urls(auth_file="cpauth.json", name="main")
-            print("启动成功，新公网地址:", new_urls)
-
-    # 3. 单纯关闭隧道
-    await stop_tunnel(auth_file="cpauth.json", name="main")
+    urls = start_cpolar_tunnel(port=25568, timeout=15)
+    print("\n最终获得公网地址:", urls)
+    await asyncio.sleep(2)
+    stop_cpolar_tunnel()
 
 if __name__ == "__main__":
     asyncio.run(main())
