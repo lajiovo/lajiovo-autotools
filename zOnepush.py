@@ -9,7 +9,7 @@ import ctypes
 import subprocess
 import threading
 import multiprocessing
-from flask import Flask, request, send_from_directory
+from flask import Flask, request, send_from_directory,abort
 from zBarkCustom import PerseusNotifyMsg, PerseusErrorMsg,PerseusWarningMsg
 from zMainHandler import run_alas_mumu_check, handlerun, Handlepush
 import zAlas
@@ -20,14 +20,14 @@ import win32gui
 import win32con
 from zFfmpeg import process_audio as ffmrun
 import asyncio
-from zCpolar import start_tunnel, stop_tunnel, query_public_urls
+import zCpolar
 from zLK import crawl_lightnovel_to_epub
 
 app = Flask(__name__)
 LISTEN_PORT = 25566
 
 # QBot 相关配置
-PYTHONW_PATH = r"Programs\Python\Python314\pythonw.exe"
+PYTHONW_PATH = r"Python\Python314\pythonw.exe"
 QBOT_SCRIPT_PATH = r"QBot\main.py"
 # 专用的精准识别标记（写在命令行参数中）
 QBOT_IDENTIFIER = "--PERSEUS_QBOT_INSTANCE"
@@ -38,7 +38,7 @@ timer_thread = None
 timer_event = threading.Event()  # 用于优雅控制和停止定时器线程
 
 # 2. 新增 MusicDL 相关配置与全局变量
-MUSIC_EXE_PATH = r"musicdl\music-dl-desktop-rust.exe"
+MUSIC_EXE_PATH = r"music-dl-desktop-rust.exe"
 MUSIC_PORT = 37777
 musicdl_thread = None
 # 2. 全局线程控制对象增加 ffm_thread
@@ -57,13 +57,19 @@ auto_stop_timer = None
 timer_lock = threading.Lock()
 forwarding_servers = []  # 存储端口转发服务器实例
 
+# 假设 webassets 文件夹与当前脚本文件在同一目录下
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WEBASSETS_DIR = os.path.join(BASE_DIR, "webassets")
+
+cpurls = []
+
 def auto_stop_task():
     """后台延时执行的关闭函数"""
     global auto_stop_timer
     try:
         print("⏰ 30分钟倒计时已到，正在自动停止 Cpolar 隧道及端口转发...")
         stop_port_forwarding()  # 停止端口转发
-        asyncio.run(stop_tunnel(auth_file="cpauth.json", name="worker"))
+        zCpolar.stop_cpolar_tunnel()
         msg = "Cpolar 隧道及端口转发已在运行 30 分钟后自动停止"
         PerseusNotifyMsg(msg, "")
     except Exception as e:
@@ -104,17 +110,10 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
         path = parts[1]
 
-        # 1. 规则 1: /bot/push 拦截拒收 (返回 403)
-        if path.startswith("/bot/push"):
-            response = b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nForbidden"
-            writer.write(response)
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
-            return
-
         # 2. 规则 2: 根据路径判断转发目标端口
-        if path.startswith("/api/") or path.startswith("/assets/"):
+        if path == "/main" or path.startswith("/main/"):
+            target_port = 25566
+        elif path == "/bot" or path.startswith("/bot/"):
             target_port = 25567
         else:
             target_port = 22267
@@ -720,6 +719,19 @@ def handle_run():
     PerseusNotifyMsg(str(run_result),"")
     return format_response(run_result, 200)
 
+
+@app.route("/main/<path:filename>", methods=["GET"])
+def serve_webassets(filename):
+    """
+    接收 /main/xxx.xxx 请求，安全返回 webassets 目录下的文件
+    """
+    try:
+        # send_from_directory 会自动检查路径，防止通过 ../ 进行越权访问
+        return send_from_directory(WEBASSETS_DIR, filename)
+    except FileNotFoundError:
+        # 文件不存在时返回 404
+        abort(404)
+
 # 4. 新增路由响应接口
 # 4. 新增与修改路由控制
 
@@ -787,16 +799,16 @@ def handle_music_stop():
 @app.route("/cp/start", methods=["GET", "POST"])
 def handle_cp_start():
     """接收 /cp/start 请求：启动隧道、开启端口转发并等待公网地址上线，设置 30 分钟自动关闭"""
-    global auto_stop_timer
+    global auto_stop_timer ,cpurls
     try:
         # 1. 启动本地 25568 端口转发路由任务
-        start_port_forwarding(25568)
+        start_port_forwarding(port=25568)
 
         # 2. 使用 asyncio.run 驱动异步独立函数
-        success = asyncio.run(start_tunnel(auth_file="cpauth.json", name="worker", wait_online=True))
-        if success:
-            urls = asyncio.run(query_public_urls(auth_file="cpauth.json", name="worker"))
+        urls = zCpolar.start_cpolar_tunnel(port=25568)
+        if urls != []:
             
+            cpurls = urls
             # 先取消之前的定时器
             cancel_existing_timer()
             
@@ -831,7 +843,7 @@ def handle_cp_stop():
         stop_port_forwarding()
 
         # 3. 关闭 Cpolar 隧道
-        asyncio.run(stop_tunnel(auth_file="cpauth.json", name="worker"))
+        zCpolar.stop_cpolar_tunnel()
         msg = "Cpolar 隧道及端口转发已成功停止"
         PerseusNotifyMsg(msg, "")
         return format_response({"status": "ok", "message": msg}, 200)
@@ -844,9 +856,10 @@ def handle_cp_stop():
 def handle_cp_get():
     """接收 /cp/get 请求：单纯查询当前公网地址"""
     try:
-        urls = asyncio.run(query_public_urls(auth_file="cpauth.json", name="worker"))
-        PerseusNotifyMsg(str(urls),"")
-        return format_response({"status": "ok", "urls": urls}, 200)
+        global cpurls
+        urls = cpurls
+        PerseusNotifyMsg(f"\n Alas:\n {urls[0]} \n Bot \n{urls[0]+"/assets/index.html"}","")
+        return format_response({"status": "ok", "urls": f"\n Alas:\n {urls[0]} \n Bot \n{urls[0]+"/assets/index.html"}"}, 200)
     except Exception as e:
         print(f"❌ Cpolar 地址获取异常: {e}")
         return format_response({"status": "error", "message": f"获取公网地址失败: {str(e)}"}, 500)
