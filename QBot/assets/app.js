@@ -60,7 +60,7 @@ async function login() {
     AUTH_KEY = keyInput;
 
     try {
-        const res = await apiFetch("/api/users");
+        const res = await apiFetch("/bot/api/users");
         if (res.status === "success") {
             document.getElementById("authKeyInput").value = "";
             document.getElementById("loginCard").style.display = "none";
@@ -80,8 +80,8 @@ async function login() {
 async function fetchTargetLists() {
     try {
         const [uRes, gRes] = await Promise.all([
-            apiFetch("/api/users"),
-            apiFetch("/api/groups")
+            apiFetch("/bot/api/users"),
+            apiFetch("/bot/api/groups")
         ]);
 
         const chatListEl = document.getElementById("chatList");
@@ -161,7 +161,7 @@ async function refreshCurrentChat() {
 async function loadHistory() {
     if (!currentTarget) return;
     try {
-        const res = await apiFetch(`/api/history?target_id=${currentTarget.id}&is_group=${currentTarget.isGroup}`);
+        const res = await apiFetch(`/bot/api/history?target_id=${currentTarget.id}&is_group=${currentTarget.isGroup}`);
         if (res.status === "success") {
             renderMessages(res.data || []);
         }
@@ -211,7 +211,7 @@ async function sendMsg() {
     const tempMsg = { role: "bot", content: content, user_id: "bot" };
     appendSingleMessage(tempMsg, true);
 
-    const url = currentTarget.isGroup ? "/api/send_group" : "/api/send_c2c";
+    const url = currentTarget.isGroup ? "/bot/api/send_group" : "/bot/api/send_c2c";
     const payload = currentTarget.isGroup 
         ? { group_openid: currentTarget.id, content, key: AUTH_KEY } 
         : { user_openid: currentTarget.id, content, key: AUTH_KEY };
@@ -265,7 +265,7 @@ function startPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
         try {
-            const res = await apiFetch("/api/check_new?reset=true");
+            const res = await apiFetch("/bot/api/check_new?reset=true");
             if (res.data && res.data.has_new) {
                 if (currentTarget) await loadHistory();
                 await fetchTargetLists();

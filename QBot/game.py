@@ -64,7 +64,6 @@ class GameSystem:
         for row_idx, row in enumerate(raw_buttons):
             buttons = []
             for btn_idx, btn in enumerate(row):
-                # 确保按钮发送的指令中绝无 @ 符号
                 clean_data = str(btn.get("data", "")).replace("@", "").strip()
                 buttons.append({
                     "id": f"btn_{row_idx}_{btn_idx}",
@@ -117,18 +116,58 @@ class GameSystem:
         else: luck = "🗿 **纯血非酋**"
         return f"{luck} *(实际 {actual} 艘 / 期望 {expected:.1f} 艘)*"
 
-    def _get_user_data(self, sender_openid: str):
-        return self.data_mgr.user_stats.setdefault(sender_openid, {
-            "name": f"指挥官_{sender_openid[:4]}", "coins": 100, "exp": 0,
+    # ==================== 数据接口适配 (适配 data_mgr 最新结构) ====================
+    def _get_user_nickname(self, sender_openid: str) -> str:
+        """从 userinfo 读取昵称，若无则自动设默认值"""
+        nick = self.data_mgr.get_nickname(sender_openid)
+        if not nick:
+            info = self.data_mgr.get_user_info(sender_openid)
+            nick = info.get("nickname") or info.get("name") or f"指挥官_{sender_openid[:4]}"
+        return nick
+
+    def _get_user_data(self, sender_openid: str) -> dict:
+        """从 userdata 读取游戏数据，若无则初始化默认字段"""
+        data = self.data_mgr.get_user_data(sender_openid)
+        
+        default_data = {
+            "coins": 100, "exp": 0,
             "counts": 0, "salvage_counts": 0, "attack_counts": 0,
             "fish_bag": {}, "dock": {}
-        })
+        }
+        
+        updated = False
+        for key, val in default_data.items():
+            if key not in data:
+                data[key] = val
+                updated = True
+                
+        # 同步并将昵称保存在数据副本中方便内部调用
+        data["name"] = self._get_user_nickname(sender_openid)
+        
+        if updated:
+            self._save_user_data(sender_openid, data)
+        return data
+
+    def _save_user_data(self, sender_openid: str, data: dict):
+        """保存游戏数据至 userdata"""
+        # 保存前剔除临时或冗余字段（如 name 属于 userinfo）
+        save_data = {k: v for k, v in data.items() if k != "name"}
+        self.data_mgr.set_user_data(sender_openid, save_data)
+
+    def set_user_name(self, sender_openid: str, name: str) -> dict:
+        """修改用户昵称并同步保存至 userinfo"""
+        if len(name) > 12: return self._msg("❌ 名称长度不能超过 12 个字符。")
+        
+        user_info = self.data_mgr.get_user_info(sender_openid)
+        user_info["nickname"] = name
+        self.data_mgr.set_user_info(sender_openid, user_info)
+        
+        return self._msg(f"✅ 个人名称已成功修改为：**【{name}】**！")
 
     # ==================== 指令分发中心 ====================
     def handle_command(self, cmd: str, parts: list, sender_openid: str) -> dict:
         arg = parts[1] if len(parts) > 1 else ""
 
-        # 默认无 @ 干净键盘
         default_btns = [
             [{"label": "⚓ 单抽打捞", "data": "#打捞"}, {"label": "🚀 十连打捞", "data": "#打捞 10"}, {"label": "🎣 挥竿钓鱼", "data": "#钓鱼"}],
             [{"label": "🎒 查看船坞", "data": "#船坞"}, {"label": "🔮 今日运势", "data": "#运势"}, {"label": "🏆 战力排行", "data": "#排行榜"}],
@@ -196,12 +235,6 @@ class GameSystem:
         handler = cmd_map.get(cmd)
         return handler() if handler else self._msg(f"❌ 未知指令：`#{cmd}`\n发送 `#帮助` 查看完整指令。", default_btns)
 
-    def set_user_name(self, sender_openid: str, name: str) -> dict:
-        if len(name) > 12: return self._msg("❌ 名称长度不能超过 12 个字符。")
-        self._get_user_data(sender_openid)["name"] = name
-        self.data_mgr.save_data()
-        return self._msg(f"✅ 个人名称已成功修改为：**【{name}】**！")
-
     # ==================== 经典玩法 ====================
     def play_salvage(self, sender_openid: str, count: int = 1) -> dict:
         user_data = self._get_user_data(sender_openid)
@@ -215,7 +248,7 @@ class GameSystem:
 
         user_data["coins"] += total_coins
         user_data["exp"] += total_exp
-        self.data_mgr.save_data()
+        self._save_user_data(sender_openid, user_data)
 
         btns = [[{"label": "⚓ 再打捞一次", "data": f"#打捞 {count}"}, {"label": "🎒 查看船坞", "data": "#船坞"}]]
 
@@ -249,12 +282,27 @@ class GameSystem:
         my_power = self.calculate_user_power(user_data["dock"])
 
         clean_target = target_str.replace("@", "").strip()
-        target_data = next((ud for uid, ud in self.data_mgr.user_stats.items() if uid != sender_openid and (clean_target in ud.get("name", "") or clean_target in uid)), None)
+        
+        # 通过 get_user_list 遍历寻找目标玩家数据
+        target_data = None
+        target_name = clean_target or "深海塞壬巡逻队"
+        target_power = 0
+        
+        if clean_target:
+            user_list = self.data_mgr.get_user_list()
+            for uid in user_list:
+                if uid == sender_openid:
+                    continue
+                nick = self._get_user_nickname(uid)
+                if clean_target in nick or clean_target in uid:
+                    target_ud = self._get_user_data(uid)
+                    target_name = nick
+                    target_power = self.calculate_user_power(target_ud.get("dock", {}))
+                    target_data = target_ud
+                    break
 
-        if target_data:
-            target_name, target_power = target_data.get("name", "未知目标"), self.calculate_user_power(target_data.get("dock", {}))
-        else:
-            target_name, target_power = clean_target or "深海塞壬巡逻队", max(100, int(my_power * random.uniform(0.8, 1.2)))
+        if not target_data:
+            target_power = max(100, int(my_power * random.uniform(0.8, 1.2)))
 
         btns = [[{"label": "⚔️ 再次出击", "data": "#出击"}, {"label": "🏆 排行榜", "data": "#排行榜"}]]
 
@@ -264,7 +312,7 @@ class GameSystem:
             user_data["dock"][chosen[1]] = user_data["dock"].get(chosen[1], 0) + 1
             user_data["coins"] += coins
             user_data["exp"] += exp
-            self.data_mgr.save_data()
+            self._save_user_data(sender_openid, user_data)
             md = (f"### ⚔️ 出击大捷！\n"
                   f"* **对阵双方**：`{user_data['name']}` ({my_power} PT) **VS** `{target_name}` ({target_power} PT)\n"
                   f"* **战果**：🎉 **成功克敌制胜！**\n"
@@ -273,7 +321,7 @@ class GameSystem:
         else:
             lost = random.randint(100, 300)
             user_data["coins"] = max(0, user_data["coins"] - lost)
-            self.data_mgr.save_data()
+            self._save_user_data(sender_openid, user_data)
             md = (f"### 💥 出击受挫！\n"
                   f"* **对阵双方**：`{user_data['name']}` ({my_power} PT) **VS** `{target_name}` ({target_power} PT)\n"
                   f"* **战果**：😭 **战力不敌惨遭击退！**\n"
@@ -294,7 +342,7 @@ class GameSystem:
         user_data["coins"] += coins
         user_data["exp"] += exp
         user_data["fish_bag"][item_name] = user_data["fish_bag"].get(item_name, 0) + 1
-        self.data_mgr.save_data()
+        self._save_user_data(sender_openid, user_data)
 
         prefixes = {
             "junk": ("🗑️ 哎呀，好像钩到了什么假东西...", f"钓到了 **【{item_name}】** ({weight}kg)！"),
@@ -317,7 +365,6 @@ class GameSystem:
         session = self.bomb_sessions.get(sender_openid)
 
         if not session or wire == "重置":
-            # 随机生成 5 条线，1 条引爆线
             bomb_wire = random.randint(1, 5)
             self.bomb_sessions[sender_openid] = {"bomb": bomb_wire, "safe": 0}
             md = (f"### 💣 拆弹专家小游戏\n"
@@ -336,7 +383,7 @@ class GameSystem:
             del self.bomb_sessions[sender_openid]
             loss = random.randint(80, 200)
             user_data["coins"] = max(0, user_data["coins"] - loss)
-            self.data_mgr.save_data()
+            self._save_user_data(sender_openid, user_data)
             btns = [[{"label": "💣 再试一次", "data": "#拆弹 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
             return self._msg(f"### 💥 BOOM！引爆了炸弹！\n你剪断了 **{chosen}号线**，不幸触发了爆炸！\n> 💸 **损失**：扣除金币 `{loss}` *(剩余 `{user_data['coins']}`)*", btns)
 
@@ -348,7 +395,7 @@ class GameSystem:
             coins, exp = 600, 250
             user_data["coins"] += coins
             user_data["exp"] += exp
-            self.data_mgr.save_data()
+            self._save_user_data(sender_openid, user_data)
             btns = [[{"label": "💣 再玩一局", "data": "#拆弹 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
             return self._msg(f"### 🎉 完美拆除！全场安全！\n你成功剪断了所有 safe 引线，完美避开炸弹！\n> 💰 **通关大奖**：金币 `+{coins}` | 经验 `+{exp}`", btns)
 
@@ -362,25 +409,35 @@ class GameSystem:
         my_power = self.calculate_user_power(user_data["dock"])
 
         clean_target = target_str.replace("@", "").strip()
-        target_data = next((ud for uid, ud in self.data_mgr.user_stats.items() if uid != sender_openid and (clean_target in ud.get("name", "") or clean_target in uid)), None)
+        
+        target_name = clean_target or "虚拟训练假人"
+        target_power = 0
+        
+        if clean_target:
+            user_list = self.data_mgr.get_user_list()
+            for uid in user_list:
+                if uid == sender_openid:
+                    continue
+                nick = self._get_user_nickname(uid)
+                if clean_target in nick or clean_target in uid:
+                    target_ud = self._get_user_data(uid)
+                    target_name = nick
+                    target_power = self.calculate_user_power(target_ud.get("dock", {}))
+                    break
 
-        if target_data:
-            target_name, target_power = target_data.get("name", "对方"), self.calculate_user_power(target_data.get("dock", {}))
-        else:
-            target_name, target_power = clean_target or "虚拟训练假人", random.randint(max(50, my_power - 200), my_power + 200)
+        if target_power == 0:
+            target_power = random.randint(max(50, my_power - 200), my_power + 200)
 
         p1_hp, p2_hp = 100, 100
         logs = []
 
         while p1_hp > 0 and p2_hp > 0:
-            # 玩家 1 攻击
             dmg1 = int(random.randint(15, 35) * (my_power / max(1, target_power)) ** 0.3)
             p2_hp -= dmg1
             event1 = random.choice(self.DUEL_EVENTS)
             logs.append(f"⚔️ **{user_data['name']}** {event1} *(造成 {dmg1} 点伤害)*")
             if p2_hp <= 0: break
 
-            # 玩家 2 攻击
             dmg2 = int(random.randint(15, 35) * (target_power / max(1, my_power)) ** 0.3)
             p1_hp -= dmg2
             event2 = random.choice(self.DUEL_EVENTS)
@@ -392,7 +449,7 @@ class GameSystem:
             coins, exp = random.randint(150, 300), random.randint(50, 120)
             user_data["coins"] += coins
             user_data["exp"] += exp
-            self.data_mgr.save_data()
+            self._save_user_data(sender_openid, user_data)
             md = (f"### 🏆 决斗胜利！\n"
                   f"**【{user_data['name']}】** VS **【{target_name}】**\n\n" +
                   "\n".join(logs[-4:]) +
@@ -401,7 +458,7 @@ class GameSystem:
         else:
             loss = random.randint(50, 100)
             user_data["coins"] = max(0, user_data["coins"] - loss)
-            self.data_mgr.save_data()
+            self._save_user_data(sender_openid, user_data)
             md = (f"### 😭 决斗战败！\n"
                   f"**【{user_data['name']}】** VS **【{target_name}】**\n\n" +
                   "\n".join(logs[-4:]) +
@@ -418,7 +475,6 @@ class GameSystem:
         def solve_24(nums):
             for p in itertools.permutations(nums):
                 for ops in itertools.product(['+', '-', '*'], repeat=3):
-                    # 简化测试组合
                     exprs = [
                         f"(({p[0]}{ops[0]}{p[1]}){ops[1]}{p[2]}){ops[2]}{p[3]}",
                         f"({p[0]}{ops[0]}{p[1]}){ops[1]}({p[2]}{ops[2]}{p[3]})"
@@ -430,7 +486,6 @@ class GameSystem:
             return False
 
         if not session or answer_expr == "重置":
-            # 随机抽一组必定有解的 4 个数字
             while True:
                 nums = [random.randint(1, 10) for _ in range(4)]
                 if solve_24(nums): break
@@ -445,7 +500,6 @@ class GameSystem:
         nums = session
         clean_expr = answer_expr.replace(" ", "").replace("x", "*").replace("X", "*")
 
-        # 检查是否使用了正确的数字
         for c in clean_expr:
             if c not in "0123456789+-*/()":
                 return self._msg("❌ 输入包含非法字符！仅允许数字、`+ - * /` 和 `()` 括号。")
@@ -457,7 +511,7 @@ class GameSystem:
                 coins, exp = 400, 200
                 user_data["coins"] += coins
                 user_data["exp"] += exp
-                self.data_mgr.save_data()
+                self._save_user_data(sender_openid, user_data)
                 btns = [[{"label": "🧮 再来一局", "data": "#24点 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
                 return self._msg(f"### 🎉 解题正确！\n算式：`{clean_expr} = 24`\n> 💰 **聪慧奖励**：金币 `+{coins}` | 经验 `+{exp}`", btns)
             else:
@@ -491,7 +545,7 @@ class GameSystem:
         coins, exp = max(50, 500 - (attempts - 1) * 50), max(20, 200 - (attempts - 1) * 20)
         user_data["coins"] += coins
         user_data["exp"] += exp
-        self.data_mgr.save_data()
+        self._save_user_data(sender_openid, user_data)
 
         btns = [[{"label": "🔢 再玩一次", "data": "#猜数字 重置"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
         md = (f"### 🎉 恭喜猜中！\n"
@@ -531,7 +585,7 @@ class GameSystem:
                 del self.blackjack_sessions[sender_openid]
                 lost = random.randint(50, 150)
                 user_data["coins"] = max(0, user_data["coins"] - lost)
-                self.data_mgr.save_data()
+                self._save_user_data(sender_openid, user_data)
                 btns = [[{"label": "🃏 再玩一局", "data": "#21点"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]]
                 return self._msg(f"### 💥 爆牌！\n* **最终手牌**：`{' '.join(p_cards)}` (`{p_score}`点)\n> 💸 扣除金币 `{lost}` *(当前: `{user_data['coins']}`)*", btns)
             
@@ -556,7 +610,7 @@ class GameSystem:
             user_data["coins"] = max(0, user_data["coins"] - lost)
             md += f"😭 **庄家胜出！**\n> 💸 **损失**：金币 `-{lost}`"
 
-        self.data_mgr.save_data()
+        self._save_user_data(sender_openid, user_data)
         return self._msg(md, [[{"label": "🎮 再来一局", "data": "#21点"}, {"label": "🎮 游戏菜单", "data": "#游戏菜单"}]])
 
     def play_rps(self, sender_openid: str, choice: str) -> dict:
@@ -579,7 +633,7 @@ class GameSystem:
 
         user_data["coins"] = max(0, user_data["coins"] + coins)
         user_data["exp"] += exp
-        self.data_mgr.save_data()
+        self._save_user_data(sender_openid, user_data)
 
         md = (f"### ✌️ 猜拳对决结果\n"
               f"* **出招**：你 **[{choice}]** VS 对方 **[{bot_choice}]**\n"
@@ -609,7 +663,7 @@ class GameSystem:
 
         user_data["coins"] += coins
         user_data["exp"] += exp
-        self.data_mgr.save_data()
+        self._save_user_data(sender_openid, user_data)
 
         md = (f"### 🎰 拉霸老虎机\n"
               f"```\n[ {r1} | {r2} | {r3} ]\n```\n"
@@ -644,10 +698,9 @@ class GameSystem:
             user_data["coins"] = max(0, user_data["coins"] - 50)
             res = f"😭 **遗憾！** 冠军是【{winner_name}】！\n> 💸 **扣除报名费**：`50` 金币"
 
-        self.data_mgr.save_data()
+        self._save_user_data(sender_openid, user_data)
         md = f"### 🏁 赛船比赛结束\n**📊 比赛成绩榜**：\n{rank_str}\n\n{res}"
         return self._msg(md, race_btns)
-
     # ==================== 查询与面板 ====================
     def get_user_assets(self, sender_openid: str) -> dict:
         user_data = self._get_user_data(sender_openid)
@@ -672,20 +725,36 @@ class GameSystem:
         return self._msg(md)
 
     def get_rank(self) -> dict:
-        if not self.data_mgr.user_stats:
+        user_list = self.data_mgr.get_user_list()
+        if not user_list:
             return self._msg("🏆 暂时还没有人参与排行！")
 
-        stats = self.data_mgr.user_stats.items()
-        
-        p_rank = sorted(stats, key=lambda x: self.calculate_user_power(x[1].get("dock", {})), reverse=True)[:5]
-        p_lines = [f"{i}. **{s.get('name', uid[:6])}** - `{self.calculate_user_power(s.get('dock', {}))} PT`" for i, (uid, s) in enumerate(p_rank, 1)]
+        # 汇总所有用户的战力与经验数据
+        all_user_stats = []
+        for uid in user_list:
+            ud = self._get_user_data(uid)
+            nick = self._get_user_nickname(uid)
+            power = self.calculate_user_power(ud.get("dock", {}))
+            exp = ud.get("exp", 0)
+            all_user_stats.append({
+                "uid": uid,
+                "name": nick,
+                "power": power,
+                "exp": exp,
+                "dock": ud.get("dock", {})
+            })
 
-        e_rank = sorted(stats, key=lambda x: x[1]["exp"], reverse=True)[:5]
-        e_lines = [f"{i}. **{s.get('name', uid[:6])}** - `Lv.{self.calculate_level(s['exp'])}` (*{s['exp']} exp*)" for i, (uid, s) in enumerate(e_rank, 1)]
+        # 战力榜排序
+        p_rank = sorted(all_user_stats, key=lambda x: x["power"], reverse=True)[:5]
+        p_lines = [f"{i}. **{s['name']}** - `{s['power']} PT`" for i, s in enumerate(p_rank, 1)]
+
+        # 等级经验榜排序
+        e_rank = sorted(all_user_stats, key=lambda x: x["exp"], reverse=True)[:5]
+        e_lines = [f"{i}. **{s['name']}** - `Lv.{self.calculate_level(s['exp'])}` (*{s['exp']} exp*)" for i, s in enumerate(e_rank, 1)]
 
         md = ("### 🏆 指挥官综合排行榜\n\n"
-              "#### ⚔️ 主力战力榜 TOP 5\n" + "\n".join(p_lines) + "\n\n"
-              "#### 🎖️ 等级经验榜 TOP 5\n" + "\n".join(e_lines))
+              "#### ⚔️ 主力战力榜 TOP 5\n" + ("\n".join(p_lines) or "* 暂无数据 *") + "\n\n"
+              "#### 🎖️ 等级经验榜 TOP 5\n" + ("\n".join(e_lines) or "* 暂无数据 *"))
         return self._msg(md)
 
     def get_fortune(self, sender_openid: str) -> dict:
