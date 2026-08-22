@@ -453,31 +453,40 @@ def kill_qbot_process():
 def start_qbot_process():
     """先精准清理，然后使用 pythonw 无窗口启动 QBot"""
     # 1. 启动前先精准查杀旧进程
-    kill_qbot_process()
+    try:
+        kill_qbot_process()
+    except Exception as e:
+        print(f"❌ 清理旧进程时发生错误: {e}")
 
+    # 2. 检查路径有效性
     if not os.path.exists(PYTHONW_PATH):
+        print(f"❌ 未找到 pythonw.exe 路径: {PYTHONW_PATH}")
         raise FileNotFoundError(f"未找到 pythonw.exe 路径: {PYTHONW_PATH}")
     if not os.path.exists(QBOT_SCRIPT_PATH):
+        print(f"❌ 未找到脚本文件路径: {QBOT_SCRIPT_PATH}")
         raise FileNotFoundError(f"未找到脚本文件路径: {QBOT_SCRIPT_PATH}")
 
-    # 2. 构建启动命令，附带 QBOT_IDENTIFIER 参数作为精准定位标记
-    cmd = [PYTHONW_PATH, QBOT_SCRIPT_PATH, QBOT_IDENTIFIER]
-    working_dir = os.path.dirname(QBOT_SCRIPT_PATH)
+    try:
+        # 3. 构建启动命令（确保在启动尝试前定义 cmd）
+        cmd = [PYTHONW_PATH, QBOT_SCRIPT_PATH, QBOT_IDENTIFIER]
+        working_dir = os.path.dirname(QBOT_SCRIPT_PATH)
 
-    # 3. 设置 Windows 彻底无窗口标志
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = 0
-    creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+        # 4. 设置 Windows 彻底无窗口标志
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
 
-    print(f"🚀 正在使用 pythonw 后台静默启动 QBot: {QBOT_SCRIPT_PATH}")
-    subprocess.Popen(
-        cmd,
-        cwd=working_dir,
-        startupinfo=startupinfo,
-        creationflags=creationflags,
-        close_fds=True
-    )
+        print(f"🚀 正在使用 pythonw 后台静默启动 QBot: {QBOT_SCRIPT_PATH}")
+        subprocess.Popen(
+            cmd,
+            cwd=working_dir,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            close_fds=True
+        )
+    except Exception as e:
+        print(f"❌ 启动 QBot 进程失败: {e}")
 
 
 # ==================== 定时器及基础状态管理 ====================

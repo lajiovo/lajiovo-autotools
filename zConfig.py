@@ -12,10 +12,17 @@ DEFAULT_CONFIG_PATH = Path("config.yaml")
 
 def _load_yaml(config_path: Path = DEFAULT_CONFIG_PATH):
     """读取 YAML 文件并返回配置对象"""
-    if not config_path.exists():
-        raise FileNotFoundError(f"未找到配置文件: {config_path.resolve()}")
+    target_path = config_path
     
-    with open(config_path, "r", encoding="utf-8") as f:
+    # 如果当前路径不存在，尝试到上一级目录寻找（最多向前查找一次）
+    if not target_path.exists():
+        parent_path = config_path.parent.resolve().parent / config_path.name
+        if parent_path.exists():
+            target_path = parent_path
+        else:
+            raise FileNotFoundError(f"未找到配置文件: {config_path.resolve()}")
+    
+    with open(target_path, "r", encoding="utf-8") as f:
         return yaml.load(f)
 
 def _save_yaml(data: Any, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
