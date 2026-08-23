@@ -1,6 +1,6 @@
 # 1. 忽略特定文件夹
 cache/
-lkache/
+lkcache/
 logs/
 .vs/
 .vscode/
@@ -10,6 +10,7 @@ botdata/
 
 # 2. 忽略特定扩展名的文件
 *.log
+*.epub
 
 # 3. 忽略特定文件
 last_checkin.txt
@@ -18,4 +19,5 @@ config.yaml
 pgrjzauth.json
 auth.json
 key.json
+command.txt
 .env

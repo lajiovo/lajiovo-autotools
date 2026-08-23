@@ -404,25 +404,46 @@ async def crawl_lightnovel_to_epub(
                 await browser.close()
 
             else:
-                # 获取主书名
-                try:
-                    raw_title = await page.inner_text(".book-detail-title", timeout=5000)
+                await asyncio.sleep(2)
+
+                # 1. 抓取封面（带有默认封面校验与重试）
+                cover_url = ""
+                for retry_cover in range(4):
+                    cover_img = await page.query_selector("span.pc-book-cover img, .book-cover img")
+                    if cover_img:
+                        cover_url = await cover_img.get_attribute("src") or ""
+
+                    if cover_url and "default" not in cover_url.lower():
+                        break
+
+                    if retry_cover < 3:
+                        print("  [!] 检测到默认封面 (default)，刷新页面重新抓取...")
+                        await page.reload(wait_until="domcontentloaded")
+                        await asyncio.sleep(2)
+
+                if cover_url:
+                    cover_url = urljoin(DOMAIN, cover_url)
+
+                # 2. 抓取书名
+                title_el = await page.query_selector(".detail-info h1, h1")
+                if title_el:
+                    raw_title = await title_el.inner_text()
                     book_title = convert_t2s(raw_title.strip(), to_simplified)
-                except Exception:
-                    pass
+                else:
+                    book_title = f"Book_{book_id}"
 
-                # 获取作者
-                try:
-                    raw_author = await page.inner_text(".book-detail-author", timeout=3000)
-                    author = convert_t2s(raw_author.strip(), to_simplified)
-                except Exception:
-                    pass
-
-                # 获取封面 URL
-                try:
-                    cover_url = await page.get_attribute(".book-cover img", "src", timeout=3000)
-                except Exception:
-                    pass
+                # 3. 抓取作者
+                author = "未知"
+                author_el = await page.query_selector(".detail-info-line span:has-text('作者') strong")
+                if not author_el:
+                    # 保底匹配
+                    author_el = await page.query_selector(".detail-info-line span:has-text('作者'), .book-author")
+                
+                if author_el:
+                    raw_author = await author_el.inner_text()
+                    # 过滤可能残余的“作者”文字
+                    cleaned_author = re.sub(r'^(作者：?|Author:?\s*)', '', raw_author.strip())
+                    author = convert_t2s(cleaned_author, to_simplified)
 
                 # 保存 metadata.json
                 save_book_metadata(
@@ -436,31 +457,51 @@ async def crawl_lightnovel_to_epub(
                     },
                 )
 
-                print(f"[✓] 书名: {book_title} | 作者: {author}")
+                print(f"[✓] 书名: {book_title}")
+                print(f"[✓] 作者: {author}")
+                print(f"[✓] 封面URL: {cover_url}")
 
-                # 解析分卷和章节目录
-                vol_elements = await page.query_selector_all(".catalog-volume, .volume-item")
-                if not vol_elements:
-                    vol_elements = [page]  # 如果没找到分卷元素，退化为全局提取
+                # 4. 遍历分卷 (Volume Tabs) 并点击展开目录
+                volume_tabs = await page.query_selector_all(".volume-tabs button.volume-tab")
+                if not volume_tabs:
+                    volume_tabs = [None]  # 无分卷 Tab 时，退化为单卷处理
 
-                for v_idx, vol in enumerate(vol_elements):
-                    try:
-                        raw_vol_title = await vol.inner_text(".volume-title", timeout=1000)
-                        vol_title = convert_t2s(raw_vol_title.strip(), to_simplified)
-                    except Exception:
-                        vol_title = f"第{v_idx + 1}卷"
+                for idx, tab in enumerate(volume_tabs):
+                    vol_name = f"第{idx+1}卷"
+                    if tab:
+                        raw_tab_name = (await tab.get_attribute("title")) or (await tab.inner_text())
+                        if raw_tab_name:
+                            vol_name = convert_t2s(raw_tab_name.strip(), to_simplified)
+                        
+                        print(f"\n[+] 切换到分卷: {vol_name}")
+                        await tab.click()
+                        await asyncio.sleep(1.5)
 
-                    ch_links = await vol.query_selector_all("a[href*='/chapter/']")
-                    chapters = []
-                    for c_link in ch_links:
-                        href = await c_link.get_attribute("href")
-                        raw_c_title = await c_link.inner_text()
-                        c_title = convert_t2s(raw_c_title.strip(), to_simplified)
-                        full_url = urljoin(DOMAIN, href)
-                        chapters.append({"title": c_title, "url": full_url})
+                    # 点击展开全目录按钮
+                    expand_btn = await page.query_selector("button.chapter-expand-button")
+                    if expand_btn and await expand_btn.is_visible():
+                        print("  [+] 点击展开全目录...")
+                        try:
+                            await expand_btn.click()
+                            await asyncio.sleep(1.5)
+                        except Exception as e:
+                            print(f"  [!] 点击展开按钮失败: {e}")
 
-                    if chapters:
-                        volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+                    # 获取当前 Tab 下的所有章节链接
+                    chapter_links = await page.query_selector_all(".chapter-grid a.chapter, a.chapter")
+                    chapters_info = []
+
+                    for link in chapter_links:
+                        raw_ch_title = (await link.inner_text()).strip()
+                        ch_title = convert_t2s(raw_ch_title, to_simplified)
+                        ch_href = await link.get_attribute("href")
+                        if ch_href:
+                            ch_url = urljoin(DOMAIN, ch_href)
+                            chapters_info.append({"title": ch_title, "url": ch_url})
+
+                    print(f"  [✓] 找到 {len(chapters_info)} 个章节")
+                    if chapters_info:
+                        volumes_data.append({"vol_title": vol_name, "chapters": chapters_info})
 
         if use_cache_only:
             # 本地纯缓存读取模式
@@ -721,7 +762,7 @@ async def crawl_lightnovel_to_epub(
 
 
 if __name__ == "__main__":
-    bid = sys.argv[1] if len(sys.argv) > 1 else "16115"
+    bid = sys.argv[1] if len(sys.argv) > 1 else "10312"
     asyncio.run(
         crawl_lightnovel_to_epub(
             book_id=bid,

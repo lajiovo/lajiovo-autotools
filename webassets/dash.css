@@ -1,0 +1,326 @@
+:root {
+    --bg-color: #0f172a;
+    --card-bg: rgba(30, 41, 59, 0.7);
+    --card-border: rgba(255, 255, 255, 0.1);
+    --text-main: #f8fafc;
+    --text-sub: #94a3b8;
+    --primary: #3b82f6;
+    --primary-hover: #2563eb;
+    --success: #10b981;
+    --success-hover: #059669;
+    --danger: #ef4444;
+    --danger-hover: #dc2626;
+    --warning: #f59e0b;
+    --warning-hover: #d97706;
+    --accent: #8b5cf6;
+    --accent-hover: #7c3aed;
+  }
+  
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  
+  body {
+    background-color: var(--bg-color);
+    color: var(--text-main);
+    min-height: 100vh;
+    padding: 16px;
+    display: flex;
+    justify-content: center;
+  }
+  
+  .container {
+    width: 100%;
+    max-width: 1400px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+  }
+  
+  header h1 {
+    font-size: 1.35rem;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+  }
+  
+  /* 桌面端左右分屏 layout，手机端自动变单列上下分屏 */
+  .dashboard-layout {
+    display: grid;
+    grid-template-columns: 1fr 420px;
+    gap: 20px;
+    align-items: start;
+  }
+  
+  @media (max-width: 992px) {
+    .dashboard-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+  
+  .options-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  .grid-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  
+  .card {
+    background: var(--card-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  }
+  
+  .card-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-sub);
+    border-bottom: 1px solid var(--card-border);
+    padding-bottom: 8px;
+  }
+  
+  .btn-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  
+  button {
+    flex: 1 1 calc(50% - 10px);
+    min-width: 100px;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: white;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  
+  button:active {
+    transform: scale(0.97);
+  }
+  
+  .btn-primary { background: var(--primary); }
+  .btn-primary:hover { background: var(--primary-hover); }
+  
+  .btn-success { background: var(--success); }
+  .btn-success:hover { background: var(--success-hover); }
+  
+  .btn-danger { background: var(--danger); }
+  .btn-danger:hover { background: var(--danger-hover); }
+  
+  .btn-warning { background: var(--warning); }
+  .btn-warning:hover { background: var(--warning-hover); }
+  
+  .btn-accent { background: var(--accent); }
+  .btn-accent:hover { background: var(--accent-hover); }
+  
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  input[type="number"], input[type="text"] {
+    width: 100%;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text-main);
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  
+  input:focus {
+    border-color: var(--primary);
+  }
+  
+  .input-with-btn {
+    display: flex;
+    gap: 8px;
+  }
+  
+  .input-with-btn input {
+    flex: 1;
+  }
+  
+  .input-with-btn button {
+    flex: 0 0 auto;
+    width: auto;
+  }
+  
+  /* 动态 Key-Value 表单样式 */
+  .kv-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  
+  .kv-row input {
+    flex: 1;
+  }
+  
+  .btn-del {
+    flex: 0 0 auto;
+    min-width: unset;
+    padding: 8px 12px;
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+  
+  .btn-del:hover {
+    background: var(--danger);
+    color: white;
+  }
+  
+  .btn-add {
+    align-self: flex-start;
+    min-width: unset;
+    flex: none;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--card-border);
+  }
+  
+  .btn-add:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  
+  /* 开关 Toggle 控件样式 */
+  .toggle-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  
+  .toggle-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    color: var(--text-sub);
+  }
+  
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 38px;
+    height: 20px;
+  }
+  
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(255, 255, 255, 0.2);
+    transition: .2s;
+    border-radius: 20px;
+  }
+  
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .2s;
+    border-radius: 50%;
+  }
+  
+  input:checked + .slider {
+    background-color: var(--primary);
+  }
+  
+  input:checked + .slider:before {
+    transform: translateX(18px);
+  }
+  
+  /* 日志控制台固定定位（桌面端 Sticky） */
+  .console-pane {
+    position: sticky;
+    top: 16px;
+  }
+  
+  .console-card {
+    height: 100%;
+  }
+  
+  .console-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .console-log {
+    background: #000;
+    border-radius: 8px;
+    padding: 12px;
+    height: 600px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #34d399;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  
+  @media (max-width: 992px) {
+    .console-log {
+      height: 350px;
+    }
+  }
+  
+  .log-entry {
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+  
+  .log-time {
+    color: var(--text-sub);
+    margin-right: 8px;
+  }
+  
+  .log-err { color: #f87171; }
+  .log-info { color: #60a5fa; }

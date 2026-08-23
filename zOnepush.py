@@ -65,6 +65,13 @@ WEBASSETS_DIR = os.path.join(BASE_DIR, "webassets")
 
 cpurls = []
 
+def parse_bool(val):
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return bool(val)
+
 def auto_stop_task():
     """后台延时执行的关闭函数"""
     global auto_stop_timer
@@ -731,17 +738,26 @@ def handle_run():
     return format_response(run_result, 200)
 
 
+# 1. 路由添加 default 参数，并同时匹配 /main/ 与 /main/<filename>
+@app.route("/main/", defaults={"filename": ""}, methods=["GET"])
 @app.route("/main/<path:filename>", methods=["GET"])
 def serve_webassets(filename):
     """
-    接收 /main/xxx.xxx 请求，安全返回 webassets 目录下的文件
+    接收 /main/xxx 请求，安全返回 webassets 目录下的文件；
+    若未指定文件名或文件不存在，则返回 index.html
     """
-    try:
-        # send_from_directory 会自动检查路径，防止通过 ../ 进行越权访问
+    # 2. 如果路径为空，默认指向 index.html
+    if not filename:
+        filename = "index.html"
+        
+    target_path = os.path.join(WEBASSETS_DIR, filename)
+    
+    # 3. 校验目标是否为实际存在的文件
+    if os.path.isfile(target_path):
         return send_from_directory(WEBASSETS_DIR, filename)
-    except FileNotFoundError:
-        # 文件不存在时返回 404
-        abort(404)
+    
+    # 4. 如果请求的文件不存在（例如 SPA 单页路由刷新），统一回退到 index.html
+    return send_from_directory(WEBASSETS_DIR, "index.html")
 
 # 4. 新增路由响应接口
 # 4. 新增与修改路由控制
@@ -877,8 +893,16 @@ def handle_cp_get():
 
 
 # 太好了，是LK，我们没救了
-@app.route("/lk/<book_id>", methods=["GET", "POST"])
-def handle_lk_crawl(book_id):
+# 支持缺省参数的路由配置
+@app.route("/lk", defaults={"book_id": None, "only": None, "cache": None}, methods=["GET", "POST"])
+@app.route("/lk/<book_id>", defaults={"only": None, "cache": None}, methods=["GET", "POST"])
+@app.route("/lk/<book_id>/<only>", defaults={"cache": None}, methods=["GET", "POST"])
+@app.route("/lk/<book_id>/<only>/<cache>", methods=["GET", "POST"])
+def handle_lk_crawl(book_id, only, cache):
+    # 缺少 book_id 直接拒绝
+    if not book_id:
+        return format_response({"status": "error", "message": "缺少必要的 book_id 参数"}, 400)
+
     req_data = {}
 
     # 第一层 try：解析请求参数
@@ -890,8 +914,17 @@ def handle_lk_crawl(book_id):
             if json_data and isinstance(json_data, dict):
                 req_data.update(json_data)
 
+        # 解析 bool 参数：优先读取 URL Path，如果未指定则读取 query/body 中的参数，默认 False
+        only_redownload_images = parse_bool(
+            only if only is not None else req_data.get("only_redownload_images", False)
+        )
+        use_cache_only = parse_bool(
+            cache if cache is not None else req_data.get("use_cache_only", False)
+        )
+
         print("\n========================================")
         print(f"【/lk/{book_id} 收到消息】内容：")
+        print(f"book_id: {book_id}, only_redownload_images: {only_redownload_images}, use_cache_only: {use_cache_only}")
         print(json.dumps(req_data, ensure_ascii=False, indent=4))
         print("========================================\n")
 
@@ -926,8 +959,8 @@ def handle_lk_crawl(book_id):
                 async_job = loop.create_task(
                     crawl_lightnovel_to_epub(
                         book_id=str_book_id,
-                        headless=True,
-                        force_redownload_images=False,
+                        only_redownload_images=only_redownload_images,
+                        use_cache_only=use_cache_only,
                     )
                 )
 

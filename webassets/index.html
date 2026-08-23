@@ -4,282 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>系统控制面板</title>
-  <style>
-    :root {
-      --bg-color: #0f172a;
-      --card-bg: rgba(30, 41, 59, 0.7);
-      --card-border: rgba(255, 255, 255, 0.1);
-      --text-main: #f8fafc;
-      --text-sub: #94a3b8;
-      --primary: #3b82f6;
-      --primary-hover: #2563eb;
-      --success: #10b981;
-      --success-hover: #059669;
-      --danger: #ef4444;
-      --danger-hover: #dc2626;
-      --warning: #f59e0b;
-      --warning-hover: #d97706;
-      --accent: #8b5cf6;
-      --accent-hover: #7c3aed;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    }
-
-    body {
-      background-color: var(--bg-color);
-      color: var(--text-main);
-      min-height: 100vh;
-      padding: 16px;
-      display: flex;
-      justify-content: center;
-    }
-
-    .container {
-      width: 100%;
-      max-width: 1400px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 4px 0;
-    }
-
-    header h1 {
-      font-size: 1.35rem;
-      font-weight: 600;
-      letter-spacing: -0.5px;
-    }
-
-    /* 桌面端左右分屏 layout，手机端自动变单列上下分屏 */
-    .dashboard-layout {
-      display: grid;
-      grid-template-columns: 1fr 420px;
-      gap: 20px;
-      align-items: start;
-    }
-
-    @media (max-width: 992px) {
-      .dashboard-layout {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .options-pane {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    .grid-cards {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
-    }
-
-    .card {
-      background: var(--card-bg);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-    }
-
-    .card-title {
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: var(--text-sub);
-      border-bottom: 1px solid var(--card-border);
-      padding-bottom: 8px;
-    }
-
-    .btn-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
-    button {
-      flex: 1 1 calc(50% - 10px);
-      min-width: 100px;
-      padding: 9px 12px;
-      border: none;
-      border-radius: 8px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      cursor: pointer;
-      color: white;
-      transition: all 0.2s ease;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-    }
-
-    button:active {
-      transform: scale(0.97);
-    }
-
-    .btn-primary { background: var(--primary); }
-    .btn-primary:hover { background: var(--primary-hover); }
-
-    .btn-success { background: var(--success); }
-    .btn-success:hover { background: var(--success-hover); }
-
-    .btn-danger { background: var(--danger); }
-    .btn-danger:hover { background: var(--danger-hover); }
-
-    .btn-warning { background: var(--warning); }
-    .btn-warning:hover { background: var(--warning-hover); }
-
-    .btn-accent { background: var(--accent); }
-    .btn-accent:hover { background: var(--accent-hover); }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    input {
-      width: 100%;
-      background: rgba(15, 23, 42, 0.6);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 8px 12px;
-      color: var(--text-main);
-      font-size: 0.85rem;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    input:focus {
-      border-color: var(--primary);
-    }
-
-    .input-with-btn {
-      display: flex;
-      gap: 8px;
-    }
-
-    .input-with-btn input {
-      flex: 1;
-    }
-
-    .input-with-btn button {
-      flex: 0 0 auto;
-      width: auto;
-    }
-
-    /* 动态 Key-Value 表单样式 */
-    .kv-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .kv-row input {
-      flex: 1;
-    }
-
-    .btn-del {
-      flex: 0 0 auto;
-      min-width: unset;
-      padding: 8px 12px;
-      background: rgba(239, 68, 68, 0.2);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.3);
-    }
-
-    .btn-del:hover {
-      background: var(--danger);
-      color: white;
-    }
-
-    .btn-add {
-      align-self: flex-start;
-      min-width: unset;
-      flex: none;
-      padding: 6px 12px;
-      font-size: 0.8rem;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--card-border);
-    }
-
-    .btn-add:hover {
-      background: rgba(255, 255, 255, 0.15);
-    }
-
-    /* 日志控制台固定定位（桌面端 Sticky） */
-    .console-pane {
-      position: sticky;
-      top: 16px;
-    }
-
-    .console-card {
-      height: 100%;
-    }
-
-    .console-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .console-log {
-      background: #000;
-      border-radius: 8px;
-      padding: 12px;
-      height: 600px;
-      max-height: calc(100vh - 100px);
-      overflow-y: auto;
-      font-family: monospace;
-      font-size: 0.8rem;
-      color: #34d399;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    @media (max-width: 992px) {
-      .console-log {
-        height: 350px;
-      }
-    }
-
-    .log-entry {
-      word-break: break-all;
-      white-space: pre-wrap;
-    }
-
-    .log-time {
-      color: var(--text-sub);
-      margin-right: 8px;
-    }
-
-    .log-err { color: #f87171; }
-    .log-info { color: #60a5fa; }
-  </style>
+  <link rel="stylesheet" href="dash.css">
 </head>
 <body>
 
 <div class="container">
   <header>
     <h1>控制中心 Dashboard</h1>
+    <button class="btn-primary" style="flex: none; min-width: auto; padding: 6px 14px;" onclick="goToMainMenu()">🏠 返回主菜单</button>
   </header>
 
   <!-- 响应式分屏主体容器 -->
@@ -315,7 +47,8 @@
           <div class="card-title">音乐服务</div>
           <div class="btn-group">
             <button class="btn-success" onclick="sendReq('/music/start')">🎵 播放音乐</button>
-            <button class="btn-danger" onclick="sendReq('/music/stop')">⏹️ 停止音乐</button>
+            <button class="btn-accent" onclick="sendReq('/music/ffm')">🎵 播放 FFM</button>
+            <button class="btn-danger" style="flex: 1 1 100%" onclick="sendReq('/music/stop')">⏹️ 停止音乐</button>
           </div>
         </div>
 
@@ -337,6 +70,22 @@
               <input type="number" id="bookId" placeholder="输入 Book ID (数字)">
               <button class="btn-accent" onclick="sendBookId()">发送 ID</button>
             </div>
+            <div class="toggle-group">
+              <div class="toggle-item">
+                <span>仅重新下载图片 (only)</span>
+                <label class="switch">
+                  <input type="checkbox" id="onlySwitch">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="toggle-item">
+                <span>仅使用缓存 (cache)</span>
+                <label class="switch">
+                  <input type="checkbox" id="cacheSwitch">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
           </div>
           <div class="btn-group">
             <button class="btn-danger" style="flex: 1 1 100%" onclick="sendReq('/lk/stop')">⏹️ LK 停止</button>
@@ -348,7 +97,7 @@
       <div class="card">
         <div class="card-title">推送字典数据 (/push)</div>
         <div class="form-group" id="pushKvContainer">
-          <!-- 默认字段: title, body -->
+          <!-- 动态加载 key-value 控件 -->
         </div>
         <button class="btn-add" onclick="addKvRow('pushKvContainer')">➕ 添加键值条目</button>
         <div class="btn-group" style="margin-top: 4px;">
@@ -360,7 +109,7 @@
       <div class="card">
         <div class="card-title">执行任务数据 (/run)</div>
         <div class="form-group" id="runKvContainer">
-          <!-- 默认字段: task -->
+          <!-- 动态加载 key-value 控件 -->
         </div>
         <button class="btn-add" onclick="addKvRow('runKvContainer')">➕ 添加键值条目</button>
         <div class="btn-group" style="margin-top: 4px;">
@@ -386,117 +135,6 @@
   </div>
 </div>
 
-<script>
-  // 初始化默认 Key-Value 字典配置
-  window.addEventListener('DOMContentLoaded', () => {
-    addKvRow('pushKvContainer', 'title', '');
-    addKvRow('pushKvContainer', 'body', '');
-    addKvRow('runKvContainer', 'task', '');
-  });
-
-  // 动态增删 Key-Value 节点
-  function addKvRow(containerId, defaultKey = '', defaultValue = '') {
-    const container = document.getElementById(containerId);
-    const row = document.createElement('div');
-    row.className = 'kv-row';
-    row.innerHTML = `
-      <input type="text" class="kv-key" placeholder="键 (Key)" value="${defaultKey}">
-      <input type="text" class="kv-value" placeholder="值 (Value)" value="${defaultValue}">
-      <button class="btn-del" onclick="this.parentElement.remove()">✕</button>
-    `;
-    container.appendChild(row);
-  }
-
-  // 搜集并构建字典发送
-  function sendKvDict(endpoint, containerId) {
-    const container = document.getElementById(containerId);
-    const keys = container.querySelectorAll('.kv-key');
-    const values = container.querySelectorAll('.kv-value');
-    
-    const payload = {};
-    let hasKeys = false;
-
-    keys.forEach((keyEl, index) => {
-      const k = keyEl.value.trim();
-      const v = values[index].value.trim();
-      if (k !== '') {
-        payload[k] = v;
-        hasKeys = true;
-      }
-    });
-
-    if (!hasKeys) {
-      log('未配置有效的 Key-Value 条目！', 'err');
-      return;
-    }
-
-    sendReq(endpoint, 'POST', payload);
-  }
-
-  // 打印日志到前端界面
-  function log(msg, type = 'info') {
-    const consoleLog = document.getElementById('consoleLog');
-    const time = new Date().toLocaleTimeString();
-    const entry = document.createElement('div');
-    entry.className = `log-entry log-${type}`;
-    
-    let formattedMsg = typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg;
-    entry.innerHTML = `<span class="log-time">[${time}]</span>${formattedMsg}`;
-    
-    consoleLog.appendChild(entry);
-    consoleLog.scrollTop = consoleLog.scrollHeight;
-  }
-
-  function clearLog() {
-    document.getElementById('consoleLog').innerHTML = '';
-  }
-
-  // 通用请求发送函数（已修复 Body stream 流重复读取问题）
-  async function sendReq(endpoint, method = 'POST', data = null) {
-    log(`发送请求: [${method}] ${endpoint}...`, 'info');
-    
-    const options = { method: method };
-    if (data) {
-      options.headers = { 'Content-Type': 'application/json' };
-      options.body = JSON.stringify(data);
-    }
-
-    try {
-      const res = await fetch(endpoint, options);
-      
-      // 1. 先只读取一次文本数据流，避免重复消费导致流关闭
-      const rawText = await res.text(); 
-      let resData;
-
-      // 2. 尝试转换为 JSON，如果非 JSON 格式则保留原始文本
-      try {
-        resData = JSON.parse(rawText);
-      } catch (e) {
-        resData = rawText;
-      }
-      
-      if (res.ok) {
-        log(`[${res.status}] 请求成功:`, 'info');
-        log(resData);
-      } else {
-        log(`[${res.status}] 接口异常:`, 'err');
-        log(resData, 'err');
-      }
-    } catch (err) {
-      log(`网络错误或请求失败: ${err.message}`, 'err');
-    }
-  }
-
-  // 处理带数字 ID 的路由请求
-  function sendBookId() {
-    const bookId = document.getElementById('bookId').value.trim();
-    if (!bookId || isNaN(bookId)) {
-      log('请输入有效的数字 Book ID', 'err');
-      return;
-    }
-    sendReq(`/lk/${bookId}`, 'GET');
-  }
-</script>
-
+<script src="dash.js"></script>
 </body>
 </html>
