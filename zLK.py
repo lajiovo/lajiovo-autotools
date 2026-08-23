@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -31,24 +30,27 @@ from zConfig import get_config
 # 禁用 requests/urllib3 的 SSL 警告提示
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 伪装桌面端 Chrome 122 User-Agent（与基础 context 配置保持一致）
+# 伪装 iPhone 15 配置及全套 HTTP Headers，防止被 TLS/WAF 阻断
 USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 )
 
 HTTP_HEADERS = {
     "User-Agent": USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "image",
+    "Sec-Fetch-Mode": "no-cors",
+    "Sec-Fetch-Site": "cross-site",
 }
 
 # 基础配置
-VIEWPORT = get_config("lk.site.viewport") or {"width": 1280, "height": 800}
-DOMAIN = get_config("lk.site.domain") or "https://www.lightnovel.fun"
-AUTH_FILE = get_config("lk.site.auth_file") or "auth.json"
-CACHE_DIR = get_config("lk.site.cache_dir") or "lkcache"
+VIEWPORT = get_config("lk.site.viewport")
+DOMAIN = get_config("lk.site.domain")
+AUTH_FILE = get_config("lk.site.auth_file")
+CACHE_DIR = get_config("lk.site.cache_dir")
 
 # Shadowrocket 代理设置
 PROXY_SERVER = get_config("lk.network.proxy_server")
@@ -187,6 +189,7 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
                     timeout=20,
                     verify=False,
                 )
+                # 必须大于 100 字节，防止保存几字节的空响应或报错文本
                 if resp.status_code == 200 and len(resp.content) > 100:
                     header = resp.content[:10]
                     ext = None
@@ -199,6 +202,7 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
                     elif header.startswith(b'RIFF') and header[8:12] == b'WEBP':
                         ext = ".webp"
 
+                    # 只有确认是合法图片格式数据才返回
                     if ext:
                         return resp.content, ext
                     else:
@@ -211,23 +215,19 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
             time.sleep(1)
     return None, None
 
-async def safe_goto(page, url: str, retries: int = 3) -> bool:
-    """安全的页面加载函数，支持降级 wait_until 选项与重试，失败返回 False 避免进程崩溃"""
-    # 策略 1: 尝试 DOMContentLoaded 策略
-    # 策略 2: 降级为 commit 策略（只要连接上获取到首字节即算成功，应对防爬干涉）
-    wait_strategies = ["domcontentloaded", "commit"]
-    
+async def safe_goto(page, url: str, retries: int = 3):
+    """安全的页面加载函数，防止网络重置 (Connection Reset)"""
     for attempt in range(retries):
-        strategy = wait_strategies[min(attempt, len(wait_strategies) - 1)]
         try:
-            await page.goto(url, wait_until=strategy, timeout=60000)
-            await page.wait_for_timeout(2000)  # 给前端脚本加载留缓冲
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(3000)
             return True
         except Exception as e:
-            print(f"   [!] 加载页面失败 ({attempt + 1}/{retries}): {url} -> {e}")
+            print(f"  [!] 加载页面失败 ({attempt + 1}/{retries}): {url} -> {e}")
             if attempt < retries - 1:
                 await asyncio.sleep(3)
-    return False
+            else:
+                raise e
 
 async def crawl_lightnovel_to_epub(
     book_id: str = None,
@@ -245,58 +245,16 @@ async def crawl_lightnovel_to_epub(
         use_cache_only = True
         print("[!] 检测到仅补齐图片模式 (only_redownload_images=True)，已自动强行切换 use_cache_only=True")
 
-    # 视口与窗口参数调整
-    win_w, win_h = 1280, 800
-    pos_x, pos_y = 100, 100
-    view_w, view_h = 1280, 800
-
     async with async_playwright() as p:
         # 1. 登录模式（没有输入 ID）
         if not book_id:
             print("[+] 未指定 book_id，进入登录模式...")
             browser = await p.chromium.launch(
-                headless=False,
-                args=[
-                    f"--window-size={win_w},{win_h}",
-                    f"--window-position={pos_x},{pos_y}",
-                    "--force-device-scale-factor=1",
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--ignore-certificate-errors",
-                    "--disable-ssl-trace"
-                ],
-                ignore_default_args=["--enable-automation"],
-                proxy={"server": PROXY_SERVER} if PROXY_SERVER else None
+                headless=False, proxy={"server": PROXY_SERVER} if PROXY_SERVER else None
             )
             context = await browser.new_context(
-                viewport={"width": view_w, "height": view_h},
-                user_agent=USER_AGENT,
-                device_scale_factor=1,
-                is_mobile=False,
-                has_touch=False,
-                locale="zh-CN",
-                extra_http_headers={
-                    "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7"
-                },
-                timezone_id="Asia/Tokyo",
-                geolocation={"latitude": 35.6762, "longitude": 139.6503},
-                permissions=["geolocation"]
+                user_agent=USER_AGENT, viewport=VIEWPORT, is_mobile=True, has_touch=True
             )
-            
-            # 注入 Stealth 防检测 JavaScript
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5]
-                });
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['zh-CN', 'zh', 'ja', 'en']
-                });
-                window.chrome = { runtime: {} };
-            """)
-
             if os.path.exists(AUTH_FILE):
                 try:
                     await context.add_cookies(
@@ -340,158 +298,114 @@ async def crawl_lightnovel_to_epub(
         if not use_cache_only:
             # 在线爬取模式
             browser = await p.chromium.launch(
-                headless=headless,
-                args=[
-                    f"--window-size={win_w},{win_h}",
-                    f"--window-position={pos_x},{pos_y}",
-                    "--force-device-scale-factor=1",
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--ignore-certificate-errors",
-                    "--disable-ssl-trace"
-                ],
-                ignore_default_args=["--enable-automation"],
-                proxy={"server": PROXY_SERVER} if PROXY_SERVER else None
+                headless=headless, proxy={"server": PROXY_SERVER} if PROXY_SERVER else None
             )
-
             context_kwargs = {
-                "viewport": {"width": view_w, "height": view_h},
                 "user_agent": USER_AGENT,
-                "device_scale_factor": 1,
-                "is_mobile": False,
-                "has_touch": False,
-                "locale": "zh-CN",
-                "extra_http_headers": {
-                    "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7"
-                },
-                "timezone_id": "Asia/Tokyo",
-                "geolocation": {"latitude": 35.6762, "longitude": 139.6503},
-                "permissions": ["geolocation"]
+                "viewport": VIEWPORT,
+                "is_mobile": True,
+                "has_touch": True,
             }
-
             if os.path.exists(AUTH_FILE):
                 context_kwargs["storage_state"] = AUTH_FILE
                 print(f"[+] 已加载登录状态文件: {AUTH_FILE}")
 
             context = await browser.new_context(**context_kwargs)
-
-            # 注入 JavaScript 防检测脚本
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5]
-                });
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['zh-CN', 'zh', 'ja', 'en']
-                });
-                window.chrome = { runtime: {} };
-            """)
-
             page = await context.new_page()
 
             cookies_list = await context.cookies()
             cookies_dict = {c["name"]: c["value"] for c in cookies_list}
 
             print(f"[+] 正在请求主页: {base_url}")
-            nav_success = await safe_goto(page, base_url)
+            await safe_goto(page, base_url)
 
-            # 如果主页无法加载（被云防/WAF 阻断 net::ERR_CONNECTION_CLOSED），尝试触发降级切换至缓存模式
-            if not nav_success:
-                print(f"\n[!] 警告: 无法通过网络连接至主页 ({base_url})。自动触发降级，转为提取本地缓存模式！")
-                use_cache_only = True
-                await browser.close()
+            # 获取主书名
+            try:
+                raw_title = await page.inner_text(".book-detail-title", timeout=5000)
+                book_title = convert_t2s(raw_title.strip(), to_simplified)
+            except Exception:
+                pass
 
-            else:
-                # 获取主书名
+            # 获取作者
+            try:
+                raw_author = await page.inner_text(".book-detail-author", timeout=3000)
+                author = convert_t2s(raw_author.strip(), to_simplified)
+            except Exception:
+                pass
+
+            # 获取封面 URL
+            try:
+                cover_url = await page.get_attribute(".book-cover img", "src", timeout=3000)
+            except Exception:
+                pass
+
+            # 保存 metadata.json
+            save_book_metadata(
+                book_title,
+                {
+                    "book_id": book_id,
+                    "title": book_title,
+                    "author": author,
+                    "cover_url": cover_url,
+                    "crawled_at": datetime.now().isoformat(),
+                },
+            )
+
+            print(f"[✓] 书名: {book_title} | 作者: {author}")
+
+            # 解析分卷和章节目录
+            vol_elements = await page.query_selector_all(".catalog-volume, .volume-item")
+            if not vol_elements:
+                vol_elements = [page]  # 如果没找到分卷元素，退化为全局提取
+
+            for v_idx, vol in enumerate(vol_elements):
                 try:
-                    raw_title = await page.inner_text(".book-detail-title", timeout=5000)
-                    book_title = convert_t2s(raw_title.strip(), to_simplified)
+                    raw_vol_title = await vol.inner_text(".volume-title", timeout=1000)
+                    vol_title = convert_t2s(raw_vol_title.strip(), to_simplified)
                 except Exception:
-                    pass
+                    vol_title = f"第{v_idx + 1}卷"
 
-                # 获取作者
-                try:
-                    raw_author = await page.inner_text(".book-detail-author", timeout=3000)
-                    author = convert_t2s(raw_author.strip(), to_simplified)
-                except Exception:
-                    pass
+                ch_links = await vol.query_selector_all("a[href*='/chapter/']")
+                chapters = []
+                for c_link in ch_links:
+                    href = await c_link.get_attribute("href")
+                    raw_c_title = await c_link.inner_text()
+                    c_title = convert_t2s(raw_c_title.strip(), to_simplified)
+                    full_url = urljoin(DOMAIN, href)
+                    chapters.append({"title": c_title, "url": full_url})
 
-                # 获取封面 URL
-                try:
-                    cover_url = await page.get_attribute(".book-cover img", "src", timeout=3000)
-                except Exception:
-                    pass
+                if chapters:
+                    volumes_data.append({"vol_title": vol_title, "chapters": chapters})
 
-                # 保存 metadata.json
-                save_book_metadata(
-                    book_title,
-                    {
-                        "book_id": book_id,
-                        "title": book_title,
-                        "author": author,
-                        "cover_url": cover_url,
-                        "crawled_at": datetime.now().isoformat(),
-                    },
-                )
-
-                print(f"[✓] 书名: {book_title} | 作者: {author}")
-
-                # 解析分卷和章节目录
-                vol_elements = await page.query_selector_all(".catalog-volume, .volume-item")
-                if not vol_elements:
-                    vol_elements = [page]  # 如果没找到分卷元素，退化为全局提取
-
-                for v_idx, vol in enumerate(vol_elements):
-                    try:
-                        raw_vol_title = await vol.inner_text(".volume-title", timeout=1000)
-                        vol_title = convert_t2s(raw_vol_title.strip(), to_simplified)
-                    except Exception:
-                        vol_title = f"第{v_idx + 1}卷"
-
-                    ch_links = await vol.query_selector_all("a[href*='/chapter/']")
-                    chapters = []
-                    for c_link in ch_links:
-                        href = await c_link.get_attribute("href")
-                        raw_c_title = await c_link.inner_text()
-                        c_title = convert_t2s(raw_c_title.strip(), to_simplified)
-                        full_url = urljoin(DOMAIN, href)
-                        chapters.append({"title": c_title, "url": full_url})
-
-                    if chapters:
-                        volumes_data.append({"vol_title": vol_title, "chapters": chapters})
-
-        if use_cache_only:
+        else:
             # 本地纯缓存读取模式
             print("[+] 已开启纯缓存提取模式 (use_cache_only=True)...")
             target_book_dir = None
-            if os.path.exists(CACHE_DIR):
-                for dname in os.listdir(CACHE_DIR):
-                    dpath = os.path.join(CACHE_DIR, dname)
-                    if os.path.isdir(dpath):
-                        meta_p = os.path.join(dpath, "metadata.json")
-                        if os.path.exists(meta_p):
-                            try:
-                                meta = json.load(open(meta_p, "r", encoding="utf-8"))
-                                if str(meta.get("book_id")) == str(book_id):
-                                    target_book_dir = dpath
-                                    book_title = meta.get("title", dname)
-                                    author = meta.get("author", "未知")
-                                    cover_url = meta.get("cover_url", "")
-                                    break
-                            except Exception:
-                                pass
+            for dname in os.listdir(CACHE_DIR):
+                dpath = os.path.join(CACHE_DIR, dname)
+                if os.path.isdir(dpath):
+                    meta_p = os.path.join(dpath, "metadata.json")
+                    if os.path.exists(meta_p):
+                        try:
+                            meta = json.load(open(meta_p, "r", encoding="utf-8"))
+                            if str(meta.get("book_id")) == str(book_id):
+                                target_book_dir = dpath
+                                book_title = meta.get("title", dname)
+                                author = meta.get("author", "未知")
+                                cover_url = meta.get("cover_url", "")
+                                break
+                        except Exception:
+                            pass
 
-                if not target_book_dir:
-                    for dname in os.listdir(CACHE_DIR):
-                        if book_id in dname:
-                            target_book_dir = os.path.join(CACHE_DIR, dname)
-                            book_title = dname
-                            break
+            if not target_book_dir:
+                for dname in os.listdir(CACHE_DIR):
+                    if book_id in dname:
+                        target_book_dir = os.path.join(CACHE_DIR, dname)
+                        book_title = dname
+                        break
 
             if not target_book_dir or not os.path.exists(target_book_dir):
-                print(f"[!] 错误: 无法通过网络抓取，且未能在本地缓存目录中找到 Book ID [{book_id}] 的缓存文件夹！")
+                print(f"[!] 错误: 未能在本地缓存目录中找到 Book ID [{book_id}] 的缓存文件夹！")
                 return []
 
             print(f"[✓] 已定位本地缓存路径: {target_book_dir}")
@@ -581,36 +495,35 @@ async def crawl_lightnovel_to_epub(
 
                 elif not use_cache_only:
                     print(f"  [+] 抓取网页章节 [{c_idx+1}/{len(chapters)}]: {ch_title} ({ch_url})")
-                    goto_ok = await safe_goto(page, ch_url)
+                    await safe_goto(page, ch_url)
 
-                    if goto_ok:
-                        try:
-                            read_more = await page.query_selector(".read-more, .expand-btn")
-                            if read_more:
-                                await read_more.click()
-                                await page.wait_for_timeout(1000)
-                        except Exception:
-                            pass
+                    try:
+                        read_more = await page.query_selector(".read-more, .expand-btn")
+                        if read_more:
+                            await read_more.click()
+                            await page.wait_for_timeout(1000)
+                    except Exception:
+                        pass
 
-                        content_el = await page.query_selector(".chapter-content, #article-content, .read-content")
-                        if content_el:
-                            raw_html = await content_el.inner_html()
-                            ch_html_content = convert_t2s(raw_html, to_simplified)
+                    content_el = await page.query_selector(".chapter-content, #article-content, .read-content")
+                    if content_el:
+                        raw_html = await content_el.inner_html()
+                        ch_html_content = convert_t2s(raw_html, to_simplified)
 
-                            img_els = await content_el.query_selector_all("img")
-                            for img in img_els:
-                                src = await img.get_attribute("src") or await img.get_attribute("data-src")
-                                if src:
-                                    full_img_url = urljoin(DOMAIN, src)
-                                    img_hash = get_url_hash(full_img_url)
-                                    images_info.append({"url": full_img_url, "hash": img_hash})
+                        img_els = await content_el.query_selector_all("img")
+                        for img in img_els:
+                            src = await img.get_attribute("src") or await img.get_attribute("data-src")
+                            if src:
+                                full_img_url = urljoin(DOMAIN, src)
+                                img_hash = get_url_hash(full_img_url)
+                                images_info.append({"url": full_img_url, "hash": img_hash})
 
-                            save_chapter_cache(
-                                book_title,
-                                vol_title,
-                                ch_title,
-                                {"title": ch_title, "url": ch_url, "content": ch_html_content, "images": images_info},
-                            )
+                        save_chapter_cache(
+                            book_title,
+                            vol_title,
+                            ch_title,
+                            {"title": ch_title, "url": ch_url, "content": ch_html_content, "images": images_info},
+                        )
 
                 ch_img_dir = get_image_save_dir(book_title, vol_title)
 
@@ -646,7 +559,7 @@ async def crawl_lightnovel_to_epub(
                             # 使用字典绑定 hash，保证格式一致
                             vol_image_map[img_hash] = (local_img_name, img_full_path)
 
-                # 精准将 HTML 中的图片 src 路径替换为标准相对路径 images/hash.ext
+# 精准将 HTML 中的图片 src 路径替换为标准相对路径 images/hash.ext
                 processed_html = ch_html_content
                 for img_hash, (img_filename, _) in vol_image_map.items():
                     # 匹配所有包含该 32位 Hash 的 src 链接并精准替换
@@ -696,7 +609,6 @@ async def crawl_lightnovel_to_epub(
                     book.add_item(img_item)
                 except Exception as e:
                     print(f"  [!] 写入图片到 EPUB 失败 ({img_filename}): {e}")
-
             # 封装生成目录与 Spine
             book.toc = tuple(epub_chapters)
             book.add_item(epub.EpubNcx())
@@ -713,15 +625,14 @@ async def crawl_lightnovel_to_epub(
             print(f"[✓] 分卷 EPUB 生成成功: {out_epub_path}")
             downloaded_epubs.append(out_epub_path)
 
-        if not use_cache_only and 'browser' in locals():
+        if not use_cache_only:
             await browser.close()
 
         print(f"\n[✓] 所有任务完成，共打包导出 {len(downloaded_epubs)} 个 EPUB 文件。")
         return downloaded_epubs
 
-
 if __name__ == "__main__":
-    bid = sys.argv[1] if len(sys.argv) > 1 else "16115"
+    bid = sys.argv[1] if len(sys.argv) > 1 else "10312"
     asyncio.run(
         crawl_lightnovel_to_epub(
             book_id=bid,
