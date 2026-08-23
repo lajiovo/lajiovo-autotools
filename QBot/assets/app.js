@@ -1,30 +1,29 @@
 let AUTH_KEY = "";
 let currentTarget = null;
 let pollTimer = null;
-let nameMap = {};
 
 // 简易安全 Markdown 解析引擎
 function parseMarkdown(text) {
     if (!text) return "";
     let html = escapeHtml(text);
 
-    // 1. 标题 ### 
+    // 1. 标题
     html = html.replace(/^### (.*$)/gim, '### $1');
     html = html.replace(/^## (.*$)/gim, '## $1');
     html = html.replace(/^# (.*$)/gim, '# $1');
 
-    // 2. 引用 > 
+    // 2. 引用
     html = html.replace(/^&gt; (.*$)/gim, '<blockquote>$1</blockquote>');
 
-    // 3. 粗体 **text**
+    // 3. 粗体
     html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-    // 4. 行内代码 `code`
+    // 4. 行内代码
     html = html.replace(/`(.*?)`/g, '<code>$1</code>');
 
-    // 5. 列表 * item 或 - item
+    // 5. 列表
     html = html.replace(/^\* (.*$)/gim, '<ul><li>$1</li></ul>');
-    html = html.replace(/<\/ul>\n<ul>/g, ''); // 合并连续列表
+    html = html.replace(/<\/ul>\n<ul>/g, '');
 
     // 6. 换行
     html = html.replace(/\n/g, '<br>');
@@ -32,12 +31,27 @@ function parseMarkdown(text) {
     return html;
 }
 
+// 统一 API 请求封装
 async function apiFetch(url, options = {}) {
     options.headers = options.headers || {};
-    options.headers["X-Api-Key"] = AUTH_KEY;
+    
+    // GET 请求携带 key 参数；POST 请求在 Body 中提交 key
+    let requestUrl = url;
+    if (!options.method || options.method.toUpperCase() === "GET") {
+        const separator = requestUrl.includes("?") ? "&" : "?";
+        requestUrl += `${separator}key=${encodeURIComponent(AUTH_KEY)}`;
+    } else if (options.method.toUpperCase() === "POST") {
+        options.headers["Content-Type"] = "application/json";
+        let bodyObj = {};
+        if (options.body) {
+            try { bodyObj = JSON.parse(options.body); } catch (e) {}
+        }
+        bodyObj.key = AUTH_KEY;
+        options.body = JSON.stringify(bodyObj);
+    }
     
     try {
-        const res = await fetch(url, options);
+        const res = await fetch(requestUrl, options);
         if (res.status === 401) {
             clearAndExit("身份校验失败：密码不正确或过期！");
             throw new Error("401 Unauthorized");
@@ -68,6 +82,8 @@ async function login() {
             
             await fetchTargetLists();
             startPolling();
+        } else {
+            alert(res.message || "登录失败");
         }
     } catch (err) {
         // 401 统一在 apiFetch 拦截
@@ -89,17 +105,18 @@ async function fetchTargetLists() {
 
         if (uRes.data && Array.isArray(uRes.data)) {
             uRes.data.forEach(user => {
-                const displayName = nameMap[user.user_id] || user.nickname || "用户 " + user.user_id.slice(-6);
-                createChatItem(user.user_id, false, displayName, user.user_id);
+                const uid = user.user_id || user.user_openid || user.id;
+                const displayName = user.nickname || "用户 " + String(uid).slice(-6);
+                createChatItem(uid, false, displayName, uid);
             });
         }
 
         if (gRes.data && Array.isArray(gRes.data)) {
             gRes.data.forEach(group => {
-                const tag = group.tag_num ? `[群${group.tag_num}] ` : "";
-                const defaultName = tag + (group.nickname || "群聊 " + group.group_id.slice(-6));
-                const displayName = nameMap[group.group_id] || defaultName;
-                createChatItem(group.group_id, true, displayName, group.group_id);
+                const gid = group.group_id || group.group_openid || group.id;
+                const tag = group.grouptag || group.tag || group.tag_num ? `[群${group.grouptag || group.tag || group.tag_num}] ` : "";
+                const displayName = tag + (group.nickname || "群聊 " + String(gid).slice(-6));
+                createChatItem(gid, true, displayName, gid);
             });
         }
     } catch (err) {
@@ -130,8 +147,7 @@ async function selectChat(id, isGroup, name, element) {
     document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
     if (element) element.classList.add("active");
 
-    const displayName = nameMap[id] || name;
-    currentTarget = { id, isGroup, nickname: displayName };
+    currentTarget = { id, isGroup, nickname: name };
     
     updateHeaderDisplay();
     document.getElementById("mainContainer").classList.add("show-chat");
@@ -161,7 +177,7 @@ async function refreshCurrentChat() {
 async function loadHistory() {
     if (!currentTarget) return;
     try {
-        const res = await apiFetch(`/bot/api/history?target_id=${currentTarget.id}&is_group=${currentTarget.isGroup}`);
+        const res = await apiFetch(`/bot/api/history?target_id=${encodeURIComponent(currentTarget.id)}&is_group=${currentTarget.isGroup}`);
         if (res.status === "success") {
             renderMessages(res.data || []);
         }
@@ -180,16 +196,14 @@ function renderMessages(messages) {
 
 function appendSingleMessage(msg, isPending = false) {
     const box = document.getElementById("messagesList");
-    const isBot = msg.role === "bot";
+    // 判断是否为机器人发出的消息 (兼容 bot/assistant/user_id=BOT)
+    const isBot = msg.role === "bot" || msg.role === "assistant" || msg.user_id === "BOT" || msg.user_id === "bot";
     const msgEl = document.createElement("div");
     msgEl.className = `msg ${isBot ? "bot" : "user"} ${isPending ? "pending" : ""}`;
     
-    let sender = isBot ? "机器人" : (msg.user_id || "用户");
-    if (!isBot && nameMap[sender]) {
-        sender = nameMap[sender];
-    }
+    // 机器人名字固定显示为 Perseus
+    let sender = isBot ? "Perseus" : (msg.nickname || msg.user_id || "用户");
     
-    // 调用 parseMarkdown 函数进行解析渲染
     const parsedContent = parseMarkdown(msg.content);
     
     msgEl.innerHTML = `
@@ -208,18 +222,17 @@ async function sendMsg() {
 
     input.value = "";
 
-    const tempMsg = { role: "bot", content: content, user_id: "bot" };
+    const tempMsg = { role: "assistant", content: content, user_id: "BOT" };
     appendSingleMessage(tempMsg, true);
 
     const url = currentTarget.isGroup ? "/bot/api/send_group" : "/bot/api/send_c2c";
     const payload = currentTarget.isGroup 
-        ? { group_openid: currentTarget.id, content, key: AUTH_KEY } 
-        : { user_openid: currentTarget.id, content, key: AUTH_KEY };
+        ? { group_openid: currentTarget.id, content } 
+        : { user_openid: currentTarget.id, content };
 
     try {
         const res = await apiFetch(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         });
 
@@ -228,6 +241,8 @@ async function sendMsg() {
                 await loadHistory();
                 await fetchTargetLists();
             }, 200);
+        } else {
+            alert(res.message || "发送失败");
         }
     } catch (err) {
         console.error("发送失败:", err);
@@ -252,13 +267,28 @@ async function submitRename() {
     const newName = document.getElementById("renameInput").value.trim();
     if (!newName) return alert("昵称不能为空！");
 
-    nameMap[currentTarget.id] = newName;
-    currentTarget.nickname = newName;
+    const url = currentTarget.isGroup ? "/bot/api/set_group_nickname" : "/bot/api/set_user_nickname";
+    const payload = currentTarget.isGroup 
+        ? { group_id: currentTarget.id, nickname: newName } 
+        : { user_id: currentTarget.id, nickname: newName };
 
-    updateHeaderDisplay();
-    closeRenameModal();
-    await fetchTargetLists();
-    if (currentTarget) await loadHistory();
+    try {
+        const res = await apiFetch(url, {
+            method: "POST",
+            body: JSON.stringify(payload)
+        });
+
+        if (res.status === "success") {
+            currentTarget.nickname = newName;
+            updateHeaderDisplay();
+            closeRenameModal();
+            await fetchTargetLists();
+        } else {
+            alert(res.message || "修改昵称失败");
+        }
+    } catch (err) {
+        console.error("修改昵称失败:", err);
+    }
 }
 
 function startPolling() {
@@ -273,7 +303,7 @@ function startPolling() {
         } catch (err) {
             console.error("轮询错误:", err);
         }
-    }, 1000);
+    }, 1500);
 }
 
 function clearAndExit(msg) {

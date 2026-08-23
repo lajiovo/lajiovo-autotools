@@ -1,38 +1,227 @@
 import os
+import platform
 import subprocess
+import time
 import urllib.parse
 import urllib.request
 from botpy.message import GroupMessage
-from config import BotDataManager ,zConfig
+from config import BotDataManager, zConfig
+
+# 尝试导入 psutil 获取系统资源，若未安装则自动降级处理
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
 
 # ------------------- 预设日志路径配置 -------------------
-# 预设日志路径列表
 PRESET_LOG_PATHS = zConfig.get_config("bot.opcmd.preset_log_paths", default=[])
-
-# Alas 错误日志路径
 ALAS_ERROR_LOG_PATH = zConfig.get_config("bot.opcmd.alas_error_log_path")
 
-# 从配置文件读取敏感字符串列表及掩码目标
-SENSITIVE_PATTERNS = zConfig.get_config(
-    "bot.opcmd.sensitive_patterns"
-)
+SENSITIVE_PATTERNS = zConfig.get_config("bot.opcmd.sensitive_patterns", default=[])
 MASK_REPLACEMENT = zConfig.get_config("bot.opcmd.mask_replacement", default=r"D:\***")
-BEGINVBS = zConfig.get_config("bot.opcmd.begin.vbs")
+BEGINVBS = zConfig.get_config("bot.opcmd.beginvbs")
 
 # 用于内存中缓存各群/用户当前的日志选择与文件读取位置 (状态记录)
 LOG_STATE_CACHE = {}
+
+
+class DataMgrAdapter:
+    """对 BotDataManager 接口进行统一适配，确保数据读取与保存的安全兼容"""
+
+    @staticmethod
+    def get_op_list(data_mgr) -> set:
+        """获取 OP 管理员集合"""
+        if hasattr(data_mgr, "get_op_list"):
+            return set(data_mgr.get_op_list())
+        raw = data_mgr.get_extra_data("op_list", [BotDataManager.DEFAULT_OP])
+        return set(raw)
+
+    @staticmethod
+    def is_op(data_mgr, openid: str) -> bool:
+        """判断 OpenID 是否具有 OP 权限"""
+        if hasattr(data_mgr, "is_op"):
+            return data_mgr.is_op(openid)
+        op_set = DataMgrAdapter.get_op_list(data_mgr)
+        return (openid.upper() if openid else "") in op_set
+
+    @staticmethod
+    def add_op(data_mgr, openid: str):
+        """添加新 OP 管理员并保存"""
+        if hasattr(data_mgr, "add_op"):
+            data_mgr.add_op(openid)
+        else:
+            op_set = DataMgrAdapter.get_op_list(data_mgr)
+            op_set.add(openid.upper())
+            data_mgr.set_extra_data("op_list", list(op_set))
+        DataMgrAdapter.save(data_mgr)
+
+    @staticmethod
+    def remove_op(data_mgr, openid: str):
+        """移除 OP 管理员并保存"""
+        if hasattr(data_mgr, "remove_op"):
+            data_mgr.remove_op(openid)
+        elif hasattr(data_mgr, "del_op"):
+            data_mgr.del_op(openid)
+        else:
+            op_set = DataMgrAdapter.get_op_list(data_mgr)
+            op_set.discard(openid.upper())
+            data_mgr.set_extra_data("op_list", list(op_set))
+        DataMgrAdapter.save(data_mgr)
+
+    @staticmethod
+    def get_group_tags(data_mgr) -> dict:
+        """获取群编号绑定映射字典"""
+        if hasattr(data_mgr, "get_group_tags"):
+            return data_mgr.get_group_tags()
+        return data_mgr.get_extra_data("group_tags", {})
+
+    @staticmethod
+    def set_group_tag(data_mgr, group_id: str, tag_num: int):
+        """设置群编号绑定记录"""
+        tags = DataMgrAdapter.get_group_tags(data_mgr)
+        tags[group_id] = tag_num
+        if hasattr(data_mgr, "set_group_tags"):
+            data_mgr.set_group_tags(tags)
+        else:
+            data_mgr.set_extra_data("group_tags", tags)
+        DataMgrAdapter.save(data_mgr)
+
+    @staticmethod
+    def get_target_port(data_mgr, default: int = 25566) -> int:
+        """获取后台服务通讯端口"""
+        if hasattr(data_mgr, "get_target_port"):
+            return data_mgr.get_target_port()
+        return data_mgr.get_extra_data("target_port", default)
+
+    @staticmethod
+    def get_notify_group_num(data_mgr, default: int = 2) -> int:
+        """获取上下线通知群编号"""
+        if hasattr(data_mgr, "get_notify_group_num"):
+            return data_mgr.get_notify_group_num()
+        return data_mgr.get_extra_data("notify_group_num", default)
+
+    @staticmethod
+    def set_notify_group_num(data_mgr, num: int):
+        """设置上下线通知群编号"""
+        if hasattr(data_mgr, "set_notify_group_num"):
+            data_mgr.set_notify_group_num(num)
+        else:
+            data_mgr.set_extra_data("notify_group_num", num)
+        DataMgrAdapter.save(data_mgr)
+
+    @staticmethod
+    def set_system_active(data_mgr, active: bool):
+        """设置系统运行/维护状态"""
+        if hasattr(data_mgr, "set_system_active"):
+            data_mgr.set_system_active(active)
+        else:
+            data_mgr.set_extra_data("system_active", active)
+        DataMgrAdapter.save(data_mgr)
+
+    @staticmethod
+    def set_push_target_group(data_mgr, num: int):
+        """设置 Push 转发接收群编号"""
+        if hasattr(data_mgr, "set_push_target_group"):
+            data_mgr.set_push_target_group(num)
+        else:
+            data_mgr.set_extra_data("push_target_group", num)
+        DataMgrAdapter.save(data_mgr)
+
+    @staticmethod
+    def set_push_active(data_mgr, active: bool):
+        """设置 Push 转发开启/关闭"""
+        if hasattr(data_mgr, "set_push_active"):
+            data_mgr.set_push_active(active)
+        else:
+            data_mgr.set_extra_data("push_active", active)
+        DataMgrAdapter.save(data_mgr)
+
+    @staticmethod
+    def get_push_history(data_mgr):
+        """获取 Push 历史消息列表"""
+        if hasattr(data_mgr, "get_push_history"):
+            return data_mgr.get_push_history()
+        if hasattr(data_mgr, "get_pushhistory"):
+            return data_mgr.get_pushhistory()
+        return data_mgr.get_extra_data("push_history", [])
+
+    @staticmethod
+    def save(data_mgr):
+        """统一持久化数据保存"""
+        if hasattr(data_mgr, "save_opsetting"):
+            data_mgr.save_opsetting()
+        elif hasattr(data_mgr, "save"):
+            data_mgr.save()
 
 
 def _sanitize_path(path_str: str) -> str:
     """隐私脱敏处理：从配置中读取敏感目录并隐藏"""
     if not path_str:
         return ""
-    
     sanitized = path_str
     for pattern in SENSITIVE_PATTERNS:
         sanitized = sanitized.replace(pattern, MASK_REPLACEMENT)
-        
     return sanitized
+
+
+def _get_system_status() -> str:
+    """获取电脑 CPU、内存、磁盘等基础占用信息"""
+    lines = ["💻 【硬件资源与系统状态】", "-------------------------"]
+
+    sys_name = platform.system()
+    sys_ver = platform.release()
+    lines.append(f"🖥️ 操作系统: {sys_name} ({sys_ver})")
+
+    if HAS_PSUTIL:
+        # CPU 占用
+        cpu_percent = psutil.cpu_percent(interval=0.5)
+        cpu_count = psutil.cpu_count(logical=True)
+        cpu_freq = psutil.cpu_freq()
+        freq_str = f" @ {cpu_freq.current:.0f}MHz" if cpu_freq else ""
+        lines.append(f"⚡ CPU 使用率: {cpu_percent}% ({cpu_count} 逻辑核心{freq_str})")
+
+        # 内存占用
+        mem = psutil.virtual_memory()
+        mem_used_gb = mem.used / (1024 ** 3)
+        mem_total_gb = mem.total / (1024 ** 3)
+        lines.append(
+            f"🧠 内存占用: {mem.percent}% ({mem_used_gb:.2f} GB / {mem_total_gb:.2f} GB)"
+        )
+
+        # 交换内存 (Swap)
+        swap = psutil.swap_memory()
+        if swap.total > 0:
+            swap_used_gb = swap.used / (1024 ** 3)
+            swap_total_gb = swap.total / (1024 ** 3)
+            lines.append(
+                f"💾 Swap 占用: {swap.percent}% ({swap_used_gb:.2f} GB / {swap_total_gb:.2f} GB)"
+            )
+
+        # 磁盘占用
+        try:
+            disk = psutil.disk_usage(os.getcwd())
+            disk_used_gb = disk.used / (1024 ** 3)
+            disk_total_gb = disk.total / (1024 ** 3)
+            lines.append(
+                f"💽 当前磁盘: {disk.percent}% ({disk_used_gb:.2f} GB / {disk_total_gb:.2f} GB)"
+            )
+        except Exception:
+            pass
+
+        # 开机运行时间
+        boot_time = psutil.boot_time()
+        uptime_sec = int(time.time() - boot_time)
+        days, rem = divmod(uptime_sec, 86400)
+        hours, rem = divmod(rem, 3600)
+        mins, _ = divmod(rem, 60)
+        uptime_str = f"{days}天 {hours}小时 {mins}分钟" if days else f"{hours}小时 {mins}分钟"
+        lines.append(f"⏱️ 连续运行: {uptime_str}")
+    else:
+        lines.append("⚠️ 系统未安装 `psutil` 模块，未能获取详细资源数据。")
+
+    lines.append("-------------------------")
+    return "\n".join(lines)
 
 
 async def handle_op_command(
@@ -42,14 +231,15 @@ async def handle_op_command(
     raw_message: GroupMessage,
     group_id: str,
 ):
-    # ------------------- 标准化 DataMgr 接口获取 -------------------
-    # 从 extra_data 中获取 op_list 与 group_tags
-    op_list = set(client.data_mgr.get_extra_data("op_list", [BotDataManager.DEFAULT_OP]))
-    group_tags = client.data_mgr.get_extra_data("group_tags", {})
+    """OP 管理员核心指令处理入口"""
+    data_mgr = client.data_mgr
 
-    # 统一处理 OP 标识符格式
+    # ------------------- 对接新 DataMgr 接口获取数据 -------------------
+    op_list = DataMgrAdapter.get_op_list(data_mgr)
+    group_tags = DataMgrAdapter.get_group_tags(data_mgr)
+
     sender_openid_upper = sender_openid.upper() if sender_openid else ""
-    is_op = sender_openid_upper in op_list
+    is_op = DataMgrAdapter.is_op(data_mgr, sender_openid)
 
     if not args:
         group_tag_info = (
@@ -63,7 +253,7 @@ async def handle_op_command(
             else f"👋 你好呀！快去试试 #钓鱼 或 #打捞 吧！{group_tag_info}"
         )
 
-    # 🛑 权限硬锁：非 OP 拒绝一切子命令响应，防止隐蔽攻击与隐私泄露
+    # 🛑 权限硬锁：非 OP 拒绝一切子命令响应
     if not is_op:
         return "❌ 权限不足！只有授权的 OP 管理员才能执行此操作。"
 
@@ -76,6 +266,7 @@ async def handle_op_command(
             "-------------------------\n"
             "📌 【机器人基础控制】\n"
             "• #op help - 查看所有 OP 指令\n"
+            "• #op sys (或 status/cpu) - 查询服务器 CPU、内存等基础资源占用\n"
             "• #op stop - 暂停机器人功能 (维护模式，屏蔽消息回复)\n"
             "• #op start - 恢复机器人功能\n"
             "• #op restart - 重新无窗口启动 QBot (执行 sv bot/start)\n"
@@ -121,6 +312,10 @@ async def handle_op_command(
             "-------------------------\n"
             "⚠ 注意：不懂别乱用\n"
         )
+
+    # ------------------- #op sys 查询系统占用状态 -------------------
+    elif sub_cmd in ["sys", "status", "sysinfo", "system", "cpu"]:
+        return _get_system_status()
 
     # ------------------- #op panel 指令面板交互接口 -------------------
     elif sub_cmd == "panel":
@@ -344,7 +539,6 @@ async def handle_op_command(
             target_file = target_item
             found_img = None
 
-            # 文件夹模式（#op log find 4 特殊逻辑）
             if mode == "folder":
                 if not os.path.isdir(target_item):
                     return f"❌ 找不到对应目录: `{_sanitize_path(target_item)}`"
@@ -423,7 +617,7 @@ async def handle_op_command(
         return "⚠️ 未知的 log 子指令，可选：`get`, `find 4`, `page`, `open`, `goto`"
 
     elif sub_cmd == "restart":
-        target_port = client.data_mgr.get_extra_data("target_port", 25566)
+        target_port = DataMgrAdapter.get_target_port(data_mgr, 25566)
         url = f"http://127.0.0.1:{target_port}/bot/start"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -439,7 +633,7 @@ async def handle_op_command(
             asyncio.run_coroutine_threadsafe(
                 client.shutdown_system("OP 指令触发"), client.bot_loop
             )
-        notify_num = client.data_mgr.get_extra_data("notify_group_num", 2)
+        notify_num = DataMgrAdapter.get_notify_group_num(data_mgr, 2)
         return f"🛑 正在准备关闭程序并通知群 {notify_num}..."
 
     elif sub_cmd == "notify":
@@ -451,8 +645,7 @@ async def handle_op_command(
         if n_action == "set":
             if len(notify_args) > 1 and notify_args[1].isdigit():
                 target_num = int(notify_args[1])
-                client.data_mgr.set_extra_data("notify_group_num", target_num)
-                client.data_mgr.save_opsetting()
+                DataMgrAdapter.set_notify_group_num(data_mgr, target_num)
                 return f"✅ 已将上下线通知群设置为：【群 {target_num}】"
             return "⚠️ 请提供要设置的群编号数字，例如：`#op notify set 2`"
 
@@ -461,9 +654,7 @@ async def handle_op_command(
     elif sub_cmd == "ex":
         if len(args) > 1 and args[1].lower() == "start":
             try:
-                subprocess.Popen(
-                    ["wscript.exe", BEGINVBS]
-                )
+                subprocess.Popen(["wscript.exe", BEGINVBS])
                 return "🚀 已成功发起分离运行指令！"
             except Exception as e:
                 return f"❌ 运行失败: {e}"
@@ -473,7 +664,7 @@ async def handle_op_command(
         if len(args) < 2:
             return "⚠️ 请提供运行参数，例如：`#op run task1,task2`"
         try:
-            target_port = client.data_mgr.get_extra_data("target_port", 25566)
+            target_port = DataMgrAdapter.get_target_port(data_mgr, 25566)
             url = f"http://127.0.0.1:{target_port}/run?task={urllib.parse.quote(' '.join(args[1:]))}"
 
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -489,7 +680,7 @@ async def handle_op_command(
         sv_action = args[1].lower()
         extra_params = " ".join(args[2:]) if len(args) > 2 else ""
 
-        target_port = client.data_mgr.get_extra_data("target_port", 25566)
+        target_port = DataMgrAdapter.get_target_port(data_mgr, 25566)
         url = f"http://127.0.0.1:{target_port}/{sv_action}"
         if extra_params:
             url += f"?task={urllib.parse.quote(extra_params)}"
@@ -507,13 +698,11 @@ async def handle_op_command(
         )
 
     elif sub_cmd == "stop":
-        client.data_mgr.set_system_active(False)
-        client.data_mgr.save_opsetting()
+        DataMgrAdapter.set_system_active(data_mgr, False)
         return "🛑 已成功暂停娱乐与辅助功能！"
 
     elif sub_cmd == "start":
-        client.data_mgr.set_system_active(True)
-        client.data_mgr.save_opsetting()
+        DataMgrAdapter.set_system_active(data_mgr, True)
         return "🚀 已成功重新启用功能！"
 
     elif sub_cmd == "push":
@@ -526,26 +715,24 @@ async def handle_op_command(
         if p_action == "set":
             if len(push_args) > 1 and push_args[1].isdigit():
                 target_num = int(push_args[1])
-                client.data_mgr.set_extra_data("push_target_group", target_num)
-                client.data_mgr.save_opsetting()
+                DataMgrAdapter.set_push_target_group(data_mgr, target_num)
                 return f"✅ 已将 Push 消息的默认推送群设置为：【群 {target_num}】"
             return "⚠️ 请提供要设置的群编号数字，例如：`#op push set 1`"
 
         elif p_action == "start":
-            client.data_mgr.set_extra_data("push_active", True)
-            client.data_mgr.save_opsetting()
+            DataMgrAdapter.set_push_active(data_mgr, True)
             return "🚀 已成功开启 Push 消息转发！"
 
         elif p_action == "stop":
-            client.data_mgr.set_extra_data("push_active", False)
-            client.data_mgr.save_opsetting()
+            DataMgrAdapter.set_push_active(data_mgr, False)
             return "🛑 已成功关闭 Push 消息转发！"
 
         elif p_action == "get":
-            # 统一采用规范接口获取推送历史，并对结构不统一进行保护
-            raw_push_history = client.data_mgr.get_pushhistory()
+            raw_push_history = DataMgrAdapter.get_push_history(data_mgr)
             if isinstance(raw_push_history, dict):
-                push_history = raw_push_history.get("history", raw_push_history.get("push", []))
+                push_history = raw_push_history.get(
+                    "history", raw_push_history.get("push", [])
+                )
             elif isinstance(raw_push_history, list):
                 push_history = raw_push_history
             else:
@@ -554,7 +741,6 @@ async def handle_op_command(
             if not push_history:
                 return "📭 当前暂无任何 Push 历史消息记录。"
 
-            # 倒序展示：最新一条在索引 0，也就是序号 1
             reversed_history = list(reversed(push_history))
             total = len(reversed_history)
 
@@ -573,7 +759,6 @@ async def handle_op_command(
                     start_idx = 1
                     end_idx = num
 
-            # 校准边界
             if start_idx < 1:
                 start_idx = 1
             if end_idx < start_idx:
@@ -585,11 +770,23 @@ async def handle_op_command(
 
             selected_items = reversed_history[start_idx - 1 : end_idx]
 
-            res_lines = [f"📬 【Push 历史消息读取】 (展示第 {start_idx} ~ {end_idx} 条 / 共 {total} 条)\n"]
+            res_lines = [
+                f"📬 【Push 历史消息读取】 (展示第 {start_idx} ~ {end_idx} 条 / 共 {total} 条)\n"
+            ]
             for idx, item in enumerate(selected_items, start=start_idx):
-                time_str = item.get("time", "未知时间") if isinstance(item, dict) else "未知时间"
-                msg_content = item.get("content", str(item)) if isinstance(item, dict) else str(item)
-                res_lines.append(f"-------------------------\n📌 [#{idx}] 🕒 {time_str}\n{msg_content}")
+                time_str = (
+                    item.get("time", "未知时间")
+                    if isinstance(item, dict)
+                    else "未知时间"
+                )
+                msg_content = (
+                    item.get("content", str(item))
+                    if isinstance(item, dict)
+                    else str(item)
+                )
+                res_lines.append(
+                    f"-------------------------\n📌 [#{idx}] 🕒 {time_str}\n{msg_content}"
+                )
 
             return "\n".join(res_lines)
 
@@ -601,24 +798,20 @@ async def handle_op_command(
             target_num = group_args[0] if group_args else None
             if not target_num:
                 return "⚠️ 请提供群编号数字，例如：`#op group 1`"
-            group_tags[group_id] = int(target_num)
-            client.data_mgr.set_extra_data("group_tags", group_tags)
-            client.data_mgr.save_opsetting()
+            DataMgrAdapter.set_group_tag(data_mgr, group_id, int(target_num))
             return f"✅ 已成功将当前群标记为：【群 {target_num}】！"
 
         action = group_args[0].lower()
         if action == "list":
             lines = [
                 f"- 群 {num}: {gid}"
-                for gid, num in sorted(
-                    group_tags.items(), key=lambda x: x[1]
-                )
+                for gid, num in sorted(group_tags.items(), key=lambda x: x[1])
             ]
             return "📋 【群编号绑定列表】\n" + ("\n".join(lines) if lines else "暂无")
         elif action == "get":
             return f"📌 当前群已被标记为：【群 {group_tags.get(group_id, '未绑定')}】"
 
-    # 🛑 权限加固：只有系统主管理员（DEFAULT_OP）具备提权/撤权操作的能力
+    # 🛑 权限加固：只有系统主管理员具备提权/撤权操作的能力
     elif sub_cmd == "add":
         if sender_openid_upper != BotDataManager.DEFAULT_OP:
             return "❌ 拒绝执行：只有超级管理员才有权限赋予新的 OP 权限！"
@@ -635,11 +828,8 @@ async def handle_op_command(
         if not target_id:
             return "⚠️ 请 @某人 或提供 OpenID"
         target_id = target_id.upper()
-        
-        client.data_mgr.add_op(target_id)
-        op_list.add(target_id)
-        client.data_mgr.set_extra_data("op_list", list(op_list))
-        client.data_mgr.save_opsetting()
+
+        DataMgrAdapter.add_op(data_mgr, target_id)
         return f"✅ 用户 [{target_id[:6]}...] 已提权为 OP。"
 
     elif sub_cmd in ["remove", "del", "rm"]:
@@ -659,16 +849,13 @@ async def handle_op_command(
             return "❌ 操作受限或未识别到有效目标"
         target_id = target_id.upper()
         if target_id in op_list:
-            op_list.remove(target_id)
-            client.data_mgr.set_extra_data("op_list", list(op_list))
-            client.data_mgr.save_opsetting()
+            DataMgrAdapter.remove_op(data_mgr, target_id)
             return f"🗑️ 已取消用户 [{target_id[:6]}...] 的 OP 权限。"
         return "ℹ️ 该用户不是 OP。"
 
     return "⚠️ 未知的 OP 命令。可使用 `#op help` 查看帮助。"
 
 
-# ------------------- 私有辅助渲染函数 -------------------
 def _render_item_list(state_key: str, page: int) -> dict:
     """格式化渲染文件/文件夹列表 (脱敏路径 + 记住当前页码)"""
     state = LOG_STATE_CACHE[state_key]
@@ -764,6 +951,5 @@ def _render_log_content(state_key: str, page: int) -> dict:
 
 
 def import_time_format(timestamp: float) -> str:
-    import time
-
+    """格式化时间戳转换函数"""
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))

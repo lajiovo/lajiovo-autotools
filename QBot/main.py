@@ -2,11 +2,12 @@ import asyncio
 import base64
 import os
 import time
+import logging
 
 import botpy
 from botpy.message import C2CMessage, GroupMessage
 from botpy.types.message import MarkdownPayload, MessageMarkdownParams
-import logging
+
 from config import (
     APP_ID,
     APP_SECRET,
@@ -367,8 +368,9 @@ class MyClient(botpy.Client):
         """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录"""
         try:
             await self.send_c2c_text(user_openid=user_openid, content=content)
+            # 使用标准的 append_c2c_message 写入，助手角色指定为 assistant
             self.data_mgr.append_c2c_message(
-                user_id=user_openid, content=content, role="bot"
+                user_id=user_openid, content=content, role="assistant"
             )
             return True
         except Exception as e:
@@ -379,8 +381,9 @@ class MyClient(botpy.Client):
         """供 Server 调用的主动发送群聊纯文本消息接口，并同步写入聊天记录"""
         try:
             await self.send_group_text(group_openid=group_openid, content=content)
+            # 使用标准的 append_group_message 写入
             self.data_mgr.append_group_message(
-                group_id=group_openid, user_id="BOT", content=content, role="bot"
+                group_id=group_openid, user_id="BOT", content=content, role="assistant"
             )
             return True
         except Exception as e:
@@ -388,28 +391,40 @@ class MyClient(botpy.Client):
             return False
 
     async def notify_group_3(self, message: str):
-        """上下线通知群（默认群 3）"""
-        target_group_num = getattr(self.data_mgr, "notify_group_num", 3)
-        group_tags = getattr(self.data_mgr, "group_tags", {})
-        target_openid = next(
-            (
-                gid
-                for gid, num in group_tags.items()
-                if num == target_group_num
-            ),
-            None,
+        """上下线通知群（从 opsetting / extra 读取提醒群编号，默认群 3）"""
+        # 1. 从 opsetting 或 extra 中获取提醒群编号
+        opsetting = self.data_mgr.get_opsetting()
+        target_group_num = opsetting.get(
+            "notify_group_num", self.data_mgr.get_extra_data("notify_group_num", 3)
         )
+
+        # 2. 从 get_group_list() 找到对应编号的群 openid
+        group_list = self.data_mgr.get_group_list()
+        target_openid = None
+        for g_info in group_list:
+            tag_num = g_info.get("tag_num")
+            grouptag = g_info.get("grouptag")
+            if (tag_num is not None and str(tag_num) == str(target_group_num)) or \
+               (grouptag is not None and str(grouptag) == str(target_group_num)):
+                target_openid = g_info.get("group_id")
+                break
 
         if target_openid:
             try:
                 await self.api.post_group_message(
                     group_openid=target_openid, msg_type=0, content=message
                 )
-                logging.info(f"📢 [群{target_group_num}通知成功] 内容: {message}")
+                logging.info(
+                    f"📢 [群{target_group_num}通知成功] 内容: {message}"
+                )
             except Exception as e:
-                logging.error(f"❌ 发送群 {target_group_num} 通知失败: {e}")
+                logging.error(
+                    f"❌ 发送群 {target_group_num} 通知失败: {e}"
+                )
         else:
-            logging.info(f"ℹ️ 未绑定【群 {target_group_num}】，跳过通知。")
+            logging.info(
+                f"ℹ️ 未绑定【群 {target_group_num}】，跳过通知。"
+            )
 
     async def shutdown_system(self, reason: str = "系统下线"):
         logging.info(f"🛑 正在执行系统退出程序... 原因: {reason}")
@@ -420,39 +435,48 @@ class MyClient(botpy.Client):
         os._exit(0)
 
     async def push_message_to_group(
-        self, msg_content: str, target_group_num: str
+        self, msg_content: str, target_group_num: str = None
     ):
-        push_active = getattr(self.data_mgr, "push_active", True)
+        """推送消息到指定群，接入新版 data_mgr 协议"""
+        push_active = self.data_mgr.get_extra_data("push_active", True)
         if not push_active:
             logging.info("ℹ️ Push 功能已关闭，跳过推送。")
             return
 
-        target_openid, warning_msg = None, ""
-        effective_group_num = target_group_num or getattr(
-            self.data_mgr, "push_target_group", None
+        # 1. 读取默认推送群配置
+        opsetting = self.data_mgr.get_opsetting()
+        default_push_group = opsetting.get(
+            "push_target_group",
+            self.data_mgr.get_extra_data("push_target_group", None),
         )
 
-        group_tags = getattr(self.data_mgr, "group_tags", {})
-        if effective_group_num and str(effective_group_num).isdigit():
-            num_int = int(effective_group_num)
-            target_openid = next(
-                (
-                    gid
-                    for gid, num in group_tags.items()
-                    if num == num_int
-                ),
-                None,
-            )
+        target_openid, warning_msg = None, ""
+        effective_group_num = target_group_num or default_push_group
 
+        # 2. 查询已绑定的群聊列表并定位 openid
+        group_list = self.data_mgr.get_group_list()
+        if effective_group_num:
+            eff_str = str(effective_group_num)
+            for g_info in group_list:
+                tag_num = g_info.get("tag_num")
+                grouptag = g_info.get("grouptag")
+                if (tag_num is not None and str(tag_num) == eff_str) or \
+                   (grouptag is not None and str(grouptag) == eff_str):
+                    target_openid = g_info.get("group_id")
+                    break
+
+        # 3. 如果未定位到对应的群，降级寻找绑定的群 1
         if not target_openid:
-            target_openid = next(
-                (gid for gid, num in group_tags.items() if num == 1),
-                None,
-            )
-            if effective_group_num:
-                warning_msg = (
-                    f"\n\n⚠️ [系统提示] 未找到绑定的群 {effective_group_num}，已默认推送至群 1"
-                )
+            for g_info in group_list:
+                tag_num = g_info.get("tag_num")
+                grouptag = g_info.get("grouptag")
+                if (tag_num is not None and str(tag_num) == "1") or \
+                   (grouptag is not None and str(grouptag) == "1"):
+                    target_openid = g_info.get("group_id")
+                    break
+
+            if effective_group_num and target_openid:
+                warning_msg = f"\n\n⚠️ [系统提示] 未找到绑定的群 {effective_group_num}，已默认推送至群 1"
 
         if not target_openid:
             logging.error(
@@ -462,13 +486,13 @@ class MyClient(botpy.Client):
 
         full_content = f"{msg_content}{warning_msg}"
 
-        # 【记录】收到 Push 请求，准备发送前记录一次
-        self.data_mgr.append_group_message(
-            group_id="push",
-            user_id="bot",
-            content=f"[Push 接收] {full_content}",
-            role="push",
-        )
+        # 4. 使用标准的 append_push_history 接口追加记录（自动注入 timestamp 自动落盘）
+        self.data_mgr.append_push_history({
+            "target_group": effective_group_num,
+            "target_openid": target_openid,
+            "content": full_content,
+            "role": "push",
+        })
 
         try:
             await self.api.post_group_message(
@@ -561,15 +585,15 @@ class MyClient(botpy.Client):
                     msg_id=msg_id,
                 )
 
-        # 自动记录机器人的回复
+        # 自动记录机器人的回复 ( role 使用 assistant )
         if reply_content:
             if is_c2c:
                 self.data_mgr.append_c2c_message(
-                    user_id=target_id, content=reply_content, role="bot"
+                    user_id=target_id, content=reply_content, role="assistant"
                 )
             else:
                 self.data_mgr.append_group_message(
-                    group_id=target_id, user_id="BOT", content=reply_content, role="bot"
+                    group_id=target_id, user_id="BOT", content=reply_content, role="assistant"
                 )
 
     async def process_command(
@@ -614,25 +638,15 @@ class MyClient(botpy.Client):
                 uptime_str += f"{minutes}分"
             uptime_str += f"{seconds}秒"
 
-            system_active = True
-            if hasattr(self.data_mgr, "opsetting") and isinstance(self.data_mgr.opsetting, dict):
-                system_active = self.data_mgr.opsetting.get("system_active", True)
-            else:
-                system_active = getattr(self.data_mgr, "system_active", True)
-
+            # 使用标准的 is_system_active 检查激活状态
+            system_active = self.data_mgr.is_system_active()
             status_text = "正常开启" if system_active else "暂停维护中"
             return (
                 f"Pong! 机器人正常运行中 ⚡\n当前服务状态：{status_text}\n已连续运行：{uptime_str}"
             )
 
         # 维护状态下，直接返回 None，不响应其他指令
-        system_active = True
-        if hasattr(self.data_mgr, "opsetting") and isinstance(self.data_mgr.opsetting, dict):
-            system_active = self.data_mgr.opsetting.get("system_active", True)
-        else:
-            system_active = getattr(self.data_mgr, "system_active", True)
-
-        if not system_active:
+        if not self.data_mgr.is_system_active():
             return None
 
         # ------------------- #game 等其他指令分发与动态消息类型处理 -------------------
@@ -664,7 +678,7 @@ class MyClient(botpy.Client):
             f" 内容: {content}"
         )
 
-        # 自动记录接收到的群聊消息
+        # 自动记录接收到的群聊消息（传入 sender_openid 自动记录/更新用户信息）
         if content:
             self.data_mgr.append_group_message(
                 group_id=group_id, user_id=sender_openid, content=content, role="user"
@@ -691,7 +705,7 @@ class MyClient(botpy.Client):
                     )
                     # 自动记录机器人的文本回复
                     self.data_mgr.append_group_message(
-                        group_id=group_id, user_id="BOT", content=reply_text, role="bot"
+                        group_id=group_id, user_id="BOT", content=reply_text, role="assistant"
                     )
                 except Exception as e:
                     logging.error(f"指令回复失败: {e}")
@@ -732,7 +746,7 @@ class MyClient(botpy.Client):
                     )
                     # 自动记录机器人的文本回复
                     self.data_mgr.append_c2c_message(
-                        user_id=sender_openid, content=reply_text, role="bot"
+                        user_id=sender_openid, content=reply_text, role="assistant"
                     )
                 except Exception as e:
                     logging.error(f"单聊指令回复失败: {e}")

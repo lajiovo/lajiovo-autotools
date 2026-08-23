@@ -31,21 +31,28 @@ STORED_KEY = _get_stored_key()
 
 
 def start_http_servers(client_instance):
-    # ===== 25567 端口：处理 API 请求与前端静态资源 =====
+    """
+    启动 25567 端口的 Web 控制台与 API 服务。
+    参数 client_instance: 包含 data_mgr (BotDataManager 实例) 及 bot_loop 的客户端对象。
+    """
+
     class ControlRequestHandler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
+            # 禁用默认的标准 HTTP 日志输出，避免控制台刷屏
             pass
 
         def _send_json(self, data, code=200):
+            """统一构建 JSON 格式响应，并添加防缓存 Header"""
             self.send_response(code)
             self.send_header("Content-type", "application/json; charset=utf-8")
-            # 禁止 API 响应被浏览器缓存
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
 
         def _verify_auth(self, input_key=None):
-            """校验密码：直接比对前端传入的明文与 key.json 中的明文密码"""
+            """校验 API 访问凭证：比对传入明文与 key.json 中的明文密钥"""
             if not STORED_KEY:
                 return False
 
@@ -91,7 +98,6 @@ def start_http_servers(client_instance):
                     content = f.read()
                 self.send_response(200)
                 self.send_header("Content-type", f"{mime_type}; charset=utf-8")
-                # 关键：强制网页静态资源完全不保存/不缓存，规避在外登录的数据残留风险
                 self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
                 self.send_header("Pragma", "no-cache")
                 self.send_header("Expires", "0")
@@ -114,7 +120,7 @@ def start_http_servers(client_instance):
             if path_part.startswith("/bot/assets/"):
                 return self._serve_static_file(path_part)
 
-            # ---------------- 2. /push 接口 (免密) ----------------
+            # ---------------- 2. /push 接口 (免密推送) ----------------
             if path_part == "/push":
                 msg_list, group_list = query_params.get("msg", []), query_params.get("group", [])
                 if not msg_list:
@@ -147,13 +153,13 @@ def start_http_servers(client_instance):
                     )
                 return
 
-            # 获取用户列表
+            # 获取已知用户列表
             if path_part == "/bot/api/users":
                 users = client_instance.data_mgr.get_user_list()
                 self._send_json({"status": "success", "data": users})
                 return
 
-            # 获取群聊列表
+            # 获取已知群聊列表
             if path_part == "/bot/api/groups":
                 groups = client_instance.data_mgr.get_group_list()
                 self._send_json({"status": "success", "data": groups})
@@ -171,7 +177,7 @@ def start_http_servers(client_instance):
                 self._send_json({"status": "success", "data": history})
                 return
 
-            # 获取昵称
+            # 获取指定对象（私聊或群聊）的显示昵称
             if path_part == "/bot/api/nickname":
                 target_id = query_params.get("target_id", [""])[0]
                 is_group = query_params.get("is_group", ["false"])[0].lower() == "true"
@@ -179,11 +185,53 @@ def start_http_servers(client_instance):
                 self._send_json({"status": "success", "nickname": nickname})
                 return
 
-            # 轮询获取是否有新消息
+            # 轮询检查是否有新消息
             if path_part == "/bot/api/check_new":
                 reset = query_params.get("reset", ["true"])[0].lower() == "true"
                 status_info = client_instance.data_mgr.check_has_new_message(reset=reset)
                 self._send_json({"status": "success", "data": status_info})
+                return
+
+            # 读取系统完整 OP 配置
+            if path_part == "/bot/api/opsetting":
+                opsetting = client_instance.data_mgr.get_opsetting()
+                self._send_json({"status": "success", "data": opsetting})
+                return
+
+            # 读取特定用户个人基础信息
+            if path_part == "/bot/api/user_info":
+                user_id = query_params.get("user_id", [""])[0]
+                if not user_id:
+                    self._send_json({"status": "error", "message": "缺少 user_id 参数"}, code=400)
+                    return
+                user_info = client_instance.data_mgr.get_user_info(user_id)
+                self._send_json({"status": "success", "data": user_info})
+                return
+
+            # 读取特定群聊完整配置信息
+            if path_part == "/bot/api/group_info":
+                group_id = query_params.get("group_id", [""])[0]
+                if not group_id:
+                    self._send_json({"status": "error", "message": "缺少 group_id 参数"}, code=400)
+                    return
+                group_info = client_instance.data_mgr.get_group_info(group_id)
+                self._send_json({"status": "success", "data": group_info})
+                return
+
+            # 读取全量推送历史
+            if path_part == "/bot/api/push_history":
+                push_history = client_instance.data_mgr.get_pushhistory()
+                self._send_json({"status": "success", "data": push_history})
+                return
+
+            # 读取自定义扩展数据
+            if path_part == "/bot/api/extra":
+                key = query_params.get("key_name", [""])[0]
+                if not key:
+                    self._send_json({"status": "error", "message": "缺少 key_name 参数"}, code=400)
+                    return
+                value = client_instance.data_mgr.get_extra_data(key)
+                self._send_json({"status": "success", "data": value})
                 return
 
             self.send_response(404)
@@ -209,10 +257,10 @@ def start_http_servers(client_instance):
 
             # 发送私聊纯文本消息
             if path_part == "/bot/api/send_c2c":
-                user_openid = data.get("user_openid")
+                user_openid = data.get("user_openid") or data.get("user_id")
                 content = data.get("content")
                 if not user_openid or not content:
-                    self._send_json({"status": "error", "message": "缺少 user_openid 或 content 参数"}, code=400)
+                    self._send_json({"status": "error", "message": "缺少 user_openid (或 user_id) 或 content 参数"}, code=400)
                     return
 
                 if client_instance.bot_loop:
@@ -225,10 +273,10 @@ def start_http_servers(client_instance):
 
             # 发送群聊纯文本消息
             if path_part == "/bot/api/send_group":
-                group_openid = data.get("group_openid")
+                group_openid = data.get("group_openid") or data.get("group_id")
                 content = data.get("content")
                 if not group_openid or not content:
-                    self._send_json({"status": "error", "message": "缺少 group_openid 或 content 参数"}, code=400)
+                    self._send_json({"status": "error", "message": "缺少 group_openid (或 group_id) 或 content 参数"}, code=400)
                     return
 
                 if client_instance.bot_loop:
@@ -239,10 +287,133 @@ def start_http_servers(client_instance):
                 self._send_json({"status": "success", "message": "群聊消息发送任务已提交"})
                 return
 
+            # 【新增 API】修改私聊用户昵称
+            if path_part in ("/bot/api/set_user_nickname", "/bot/api/set_user_info"):
+                user_id = data.get("user_id") or data.get("user_openid")
+                nickname = data.get("nickname")
+                info_dict = data.get("info_dict", {})
+
+                if not user_id:
+                    self._send_json({"status": "error", "message": "缺少 user_id 参数"}, code=400)
+                    return
+
+                # 构造要更新的用户信息对象
+                update_payload = {}
+                if nickname is not None:
+                    update_payload["nickname"] = nickname
+                if isinstance(info_dict, dict):
+                    update_payload.update(info_dict)
+
+                if not update_payload:
+                    self._send_json({"status": "error", "message": "缺少要更新的用户信息字段 (如 nickname)"}, code=400)
+                    return
+
+                client_instance.data_mgr.set_user_info(str(user_id), update_payload)
+                self._send_json({
+                    "status": "success",
+                    "message": "用户信息/昵称更新成功",
+                    "user_id": str(user_id),
+                    "updated": update_payload
+                })
+                return
+
+            # 【新增 API】修改群聊备注/昵称
+            if path_part == "/bot/api/set_group_nickname":
+                group_id = data.get("group_id") or data.get("group_openid")
+                nickname = data.get("nickname")
+
+                if not group_id or nickname is None:
+                    self._send_json({"status": "error", "message": "缺少 group_id 或 nickname 参数"}, code=400)
+                    return
+
+                client_instance.data_mgr.set_group_nickname(str(group_id), str(nickname))
+                self._send_json({
+                    "status": "success",
+                    "message": "群聊别名/昵称更新成功",
+                    "group_id": str(group_id),
+                    "nickname": str(nickname)
+                })
+                return
+
+            # 【新增 API】修改群聊标签/编号
+            if path_part == "/bot/api/set_group_tag":
+                group_id = data.get("group_id") or data.get("group_openid")
+                grouptag = data.get("grouptag") or data.get("tag")
+
+                if not group_id or grouptag is None:
+                    self._send_json({"status": "error", "message": "缺少 group_id 或 grouptag 参数"}, code=400)
+                    return
+
+                client_instance.data_mgr.set_group_tag(str(group_id), str(grouptag))
+                self._send_json({
+                    "status": "success",
+                    "message": "群聊标签/编号更新成功",
+                    "group_id": str(group_id),
+                    "grouptag": str(grouptag)
+                })
+                return
+
+            # 保存/更新群聊完整配置
+            if path_part == "/bot/api/set_group_info":
+                group_id = data.get("group_id") or data.get("group_openid")
+                info_dict = data.get("info_dict", {})
+
+                if not group_id or not isinstance(info_dict, dict):
+                    self._send_json({"status": "error", "message": "缺少 group_id 或有效的 info_dict 参数"}, code=400)
+                    return
+
+                client_instance.data_mgr.set_group_info(str(group_id), info_dict)
+                self._send_json({
+                    "status": "success",
+                    "message": "群聊配置更新成功",
+                    "group_id": str(group_id)
+                })
+                return
+
+            # 设置并保存系统 OP 配置
+            if path_part == "/bot/api/set_opsetting":
+                setting_dict = data.get("opsetting")
+                active = data.get("active")
+                add_op_id = data.get("add_op")
+                remove_op_id = data.get("remove_op")
+
+                if setting_dict is not None and isinstance(setting_dict, dict):
+                    client_instance.data_mgr.set_opsetting(setting_dict)
+                if active is not None and isinstance(active, bool):
+                    client_instance.data_mgr.set_system_active(active)
+                if add_op_id:
+                    client_instance.data_mgr.add_op(add_op_id)
+                if remove_op_id:
+                    client_instance.data_mgr.remove_op(remove_op_id)
+
+                updated_opsetting = client_instance.data_mgr.get_opsetting()
+                self._send_json({
+                    "status": "success",
+                    "message": "系统配置更新成功",
+                    "data": updated_opsetting
+                })
+                return
+
+            # 设置扩展自定义数据
+            if path_part == "/bot/api/set_extra":
+                key = data.get("key_name") or data.get("key")
+                value = data.get("value")
+
+                if not key:
+                    self._send_json({"status": "error", "message": "缺少 key_name 或 key 参数"}, code=400)
+                    return
+
+                client_instance.data_mgr.set_extra_data(str(key), value)
+                self._send_json({
+                    "status": "success",
+                    "message": f"扩展数据 [{key}] 保存成功"
+                })
+                return
+
             self.send_response(404)
             self.end_headers()
 
-    # 启动 25567 端口服务
+    # 启动 25567 端口服务线程
     threading.Thread(
         target=lambda: HTTPServer(('', 25567), ControlRequestHandler).serve_forever(),
         daemon=True
