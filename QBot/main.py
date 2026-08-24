@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -23,6 +24,18 @@ from server import start_http_servers
 
 # ------------------- 文件配置区 -------------------
 TARGET_BOT_PREFIX = zConfig.get_config("bot.target_bot_prefix")
+
+# 官方文件上传错误码映射表
+UPLOAD_ERROR_MAP = {
+    850018: "群被禁言或者机器人被禁言",
+    850019: "不支持的文件格式",
+    850026: "下载原始文件失败（请检查 URL 是否可访问或重试）",
+    850027: "发送数据超时",
+    850031: "上传文件超过大小限制",
+    10000: "不支持的操作",
+    40093001: "文件上传失败，请重试（BDH 通道异常）",
+    40093002: "超过今天发送文件容量上限",
+}
 # --------------------------------------------------
 
 apply_sdk_patch()
@@ -307,6 +320,8 @@ class MyClient(botpy.Client):
         self.data_mgr = BotDataManager()
         self.game_sys = GameSystem(self.data_mgr)
         self.youzai_mgr = YouzaiWSClient(self)  # 初始化 YouzaiBot 长连接管理器
+        self.processed_msg_ids = {}  # 消息 ID 去重字典 {msg_id: timestamp}
+        self.msg_seq_map = {}        # msg_id 对应的 seq 递增字典 {msg_id: {"seq": int, "time": float}}
 
     async def on_ready(self):
         logging.info(f"robot 「{self.robot.name}」 已成功上线！")
@@ -316,8 +331,40 @@ class MyClient(botpy.Client):
         await self.notify_group_3("🟢 机器人已上线并准备就绪！")
 
     # =========================================================================
-    # 2. 核心 HTTP 底层请求封装
+    # 2. 核心 HTTP 底层请求封装与辅助函数
     # =========================================================================
+    def _is_duplicate_msg(self, msg_id: str) -> bool:
+        """检查消息 ID 是否在短时间内重复触发，若是则过滤处理"""
+        if not msg_id:
+            return False
+        now = time.time()
+        # 清理超过 60 秒的 msg_id 记录
+        self.processed_msg_ids = {
+            k: v for k, v in self.processed_msg_ids.items() if now - v < 60
+        }
+        if msg_id in self.processed_msg_ids:
+            return True
+        self.processed_msg_ids[msg_id] = now
+        return False
+
+    def _get_next_msg_seq(self, msg_id: str) -> int:
+        """根据 msg_id 获取并自动递增下一个 msg_seq 序号，防止腾讯 40054005 消息去重拦截"""
+        if not msg_id:
+            return 1
+        now = time.time()
+        # 清理超过 300 秒的 msg_seq 记录
+        self.msg_seq_map = {
+            k: v for k, v in self.msg_seq_map.items() if now - v.get("time", 0) < 300
+        }
+
+        if msg_id not in self.msg_seq_map:
+            self.msg_seq_map[msg_id] = {"seq": 1, "time": now}
+            return 1
+        else:
+            self.msg_seq_map[msg_id]["seq"] += 1
+            self.msg_seq_map[msg_id]["time"] = now
+            return self.msg_seq_map[msg_id]["seq"]
+
     async def _raw_post(self, route_path: str, payload: dict, **path_params):
         """通用底层 HTTP POST 请求，绕过 SDK 强类型校验"""
         route = botpy.http.Route("POST", route_path, **path_params)
@@ -341,6 +388,34 @@ class MyClient(botpy.Client):
     # =========================================================================
     # 3. 各种类型消息发送接口 (Text, Markdown, Image, Card, Panel/Menu)
     # =========================================================================
+    def _save_base64_to_cache(self, base64_str: str) -> str:
+        """解析 Base64 字符串并缓存至本地 ./temp_images 目录，返回本地文件路径"""
+        try:
+            os.makedirs("temp_images", exist_ok=True)
+
+            clean_b64 = base64_str
+            if "base64," in clean_b64:
+                clean_b64 = clean_b64.split("base64,")[1]
+            elif clean_b64.startswith("base64://"):
+                clean_b64 = clean_b64[9:]
+            clean_b64 = clean_b64.strip()
+
+            img_bytes = base64.b64decode(clean_b64)
+            img_hash = hashlib.md5(img_bytes).hexdigest()
+            file_path = os.path.join("temp_images", f"{img_hash}.png")
+
+            if not os.path.exists(file_path):
+                with open(file_path, "wb") as f:
+                    f.write(img_bytes)
+                logging.info(f"💾 [图片已成功缓存至本地] 路径: {file_path} | 大小: {len(img_bytes) / 1024:.2f} KB")
+            else:
+                logging.info(f"⚡ [命中本地图片缓存] 路径: {file_path}")
+
+            return file_path
+        except Exception as e:
+            logging.error(f"❌ [图片缓存至本地失败]: {e}")
+            return ""
+
     # --- 文本/引用消息 ---
     async def send_group_text(
         self,
@@ -469,46 +544,110 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         ref_msg_id: str = None,
     ):
-        """支持本地路径或网络 URL 发送群图片 (msg_type=7)"""
-        logging.info(f"🖼️ 正在处理群图片发送: {file_path_or_url}")
-
-        if file_path_or_url.startswith("http://") or file_path_or_url.startswith(
-            "https://"
-        ):
-            upload_res = await self.api.post_group_file(
-                group_openid=group_openid, file_type=1, url=file_path_or_url
+        """支持本地路径、Base64 或网络 URL 发送群图片 (msg_type=7)"""
+        # 如果传入的是 Base64 字符串，先缓存落盘为本地文件
+        if (
+            file_path_or_url.startswith("base64://")
+            or "base64," in file_path_or_url
+            or (
+                not file_path_or_url.startswith("http")
+                and not os.path.exists(file_path_or_url)
+                and len(file_path_or_url) > 100
             )
-        else:
-            if not os.path.exists(file_path_or_url):
-                raise FileNotFoundError(f"本地图片不存在: {file_path_or_url}")
+        ):
+            cached_path = self._save_base64_to_cache(file_path_or_url)
+            if cached_path:
+                file_path_or_url = cached_path
 
-            with open(file_path_or_url, "rb") as f:
-                file_base64 = base64.b64encode(f.read()).decode("utf-8")
+        logging.info(f"🖼️ 正在处理群图片发送 | OpenID: {group_openid} | 资源: {file_path_or_url}")
 
-            upload_payload = {"file_type": 1, "file_data": file_base64}
+        try:
+            upload_payload = {"file_type": 1, "srv_send_msg": False}
+
+            if file_path_or_url.startswith("http://") or file_path_or_url.startswith(
+                "https://"
+            ):
+                upload_payload["url"] = file_path_or_url
+            else:
+                if not os.path.exists(file_path_or_url):
+                    err_msg = f"本地图片文件不存在: {file_path_or_url}"
+                    logging.error(f"❌ [群图片发送失败] {err_msg}")
+                    raise FileNotFoundError(err_msg)
+
+                # 检查是否有外部 HTTP 静态服务配置
+                opsetting = self.data_mgr.get_opsetting()
+                public_server_url = opsetting.get("public_server_url") or zConfig.get_config("bot.public_server_url", None)
+
+                if public_server_url and file_path_or_url.startswith("temp_images"):
+                    filename = os.path.basename(file_path_or_url)
+                    file_http_url = f"{public_server_url.rstrip('/')}/temp_images/{filename}"
+                    upload_payload["url"] = file_http_url
+                    logging.info(f"🌐 [使用公网 HTTP URL 方案上传图片]: {file_http_url}")
+                else:
+                    with open(file_path_or_url, "rb") as f:
+                        file_base64 = base64.b64encode(f.read()).decode("utf-8")
+                    upload_payload["file_data"] = file_base64
+
             upload_res = await self._raw_post(
                 "/v2/groups/{group_openid}/files",
                 upload_payload,
                 group_openid=group_openid,
             )
 
-        file_info = (
-            upload_res.get("file_info")
-            if isinstance(upload_res, dict)
-            else getattr(upload_res, "file_info", upload_res)
-        )
+            # 解析上传响应结果并打印详细信息
+            logging.debug(f"🔍 [群文件上传响应原始数据]: {upload_res}")
 
-        kwargs = {
-            "group_openid": group_openid,
-            "msg_type": 7,
-            "msg_id": msg_id,
-            "media": {"file_info": file_info},
-        }
-        if ref_msg_id:
-            kwargs["message_reference"] = {"message_id": ref_msg_id}
+            file_info = None
+            if isinstance(upload_res, dict):
+                err_code = upload_res.get("code")
+                if err_code and err_code != 0:
+                    err_desc = UPLOAD_ERROR_MAP.get(
+                        err_code, upload_res.get("message", "未知上传错误")
+                    )
+                    logging.error(
+                        f"❌ [群图片上传被拒绝] 错误码: {err_code} ({err_desc}) | 提示信息: {upload_res.get('message', '')}"
+                    )
+                    raise RuntimeError(f"群文件上传失败 [{err_code}]: {err_desc}")
 
-        await self.api.post_group_message(**kwargs)
-        logging.info(f"🖼️ [富媒体图片发送成功] OpenID: {group_openid}")
+                file_info = upload_res.get("file_info")
+                file_uuid = upload_res.get("file_uuid", "N/A")
+                ttl = upload_res.get("ttl", "N/A")
+                logging.info(
+                    f"✅ [群文件上传成功] UUID: {file_uuid} | TTL: {ttl}s"
+                )
+            else:
+                file_info = getattr(upload_res, "file_info", upload_res)
+
+            if not file_info:
+                logging.error(f"❌ [群图片上传异常] 响应中未包含有效的 file_info 字段: {upload_res}")
+                raise ValueError("上传接口未返回有效的 file_info")
+
+            # 组装发送消息请求
+            seq = self._get_next_msg_seq(msg_id)
+            kwargs = {
+                "group_openid": group_openid,
+                "msg_type": 7,
+                "msg_id": msg_id,
+                "msg_seq": seq,
+                "media": {"file_info": file_info},
+            }
+            if ref_msg_id:
+                kwargs["message_reference"] = {"message_id": ref_msg_id}
+
+            send_res = await self.api.post_group_message(**kwargs)
+            logging.info(f"🖼️ [富媒体图片发送成功] OpenID: {group_openid}")
+            return send_res
+
+        except Exception as e:
+            logging.error(
+                f"❌ [群富媒体图片发送失败] OpenID: {group_openid} | 异常详情: {e}",
+                exc_info=True,
+            )
+            # 降级兜底方案：如果图片发送失败，且有附带的文字，则尝试发送纯文字
+            if content:
+                logging.info("⚠️ 图片发送失败，触发文本降级保底机制...")
+                await self.send_group_text(group_openid, f"[图片发送失败] {content}", msg_id)
+            raise
 
     async def send_c2c_image(
         self,
@@ -518,7 +657,20 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         ref_msg_id: str = None,
     ):
-        """支持本地路径或网络 URL 发送单聊图片 (msg_type=7)"""
+        """支持本地路径、Base64 或网络 URL 发送单聊图片 (msg_type=7)"""
+        if (
+            file_path_or_url.startswith("base64://")
+            or "base64," in file_path_or_url
+            or (
+                not file_path_or_url.startswith("http")
+                and not os.path.exists(file_path_or_url)
+                and len(file_path_or_url) > 100
+            )
+        ):
+            cached_path = self._save_base64_to_cache(file_path_or_url)
+            if cached_path:
+                file_path_or_url = cached_path
+
         logging.info(f"🖼️ 正在处理单聊图片发送: {file_path_or_url}")
 
         if file_path_or_url.startswith("http://") or file_path_or_url.startswith(
@@ -549,8 +701,10 @@ class MyClient(botpy.Client):
             else getattr(upload_res, "file_info", upload_res)
         )
 
+        seq = self._get_next_msg_seq(msg_id)
         payload = {
             "msg_type": 7,
+            "msg_seq": seq,
             "media": {"file_info": file_info},
         }
         if msg_id:
@@ -1101,6 +1255,12 @@ class MyClient(botpy.Client):
         content = getattr(message, "content", "").strip()
         group_id = getattr(message, "group_openid", "")
         msg_id = getattr(message, "id", "")
+
+        # 消息接收去重，防止 SDK 重复触发
+        if self._is_duplicate_msg(msg_id):
+            logging.info(f"⚡ [跳过重复群消息事件] msg_id: {msg_id}")
+            return
+
         author = getattr(message, "author", None)
         sender_openid = (
             getattr(author, "member_openid", "未知用户") if author else "未知用户"
@@ -1166,6 +1326,12 @@ class MyClient(botpy.Client):
     async def _handle_c2c_msg(self, message: C2CMessage, event_name: str):
         content = getattr(message, "content", "").strip()
         msg_id = getattr(message, "id", "")
+
+        # 消息接收去重，防止 SDK 重复触发
+        if self._is_duplicate_msg(msg_id):
+            logging.info(f"⚡ [跳过重复单聊消息事件] msg_id: {msg_id}")
+            return
+
         author = getattr(message, "author", None)
         sender_openid = (
             getattr(author, "user_openid", "未知用户") if author else "未知用户"
