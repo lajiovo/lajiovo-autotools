@@ -9,6 +9,7 @@ QBot2/
 botdata/
 Novels/
 browser_downloads/
+yunzai/
 
 # 2. 忽略特定扩展名的文件
 *.log
