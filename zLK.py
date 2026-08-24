@@ -134,6 +134,32 @@ def save_book_metadata(book_title: str, metadata: dict):
     except Exception as e:
         print(f"  [!] 保存书籍元数据失败: {e}")
 
+def get_catalog_cache_path(book_title: str) -> str:
+    """获取小说目录结构缓存 (catalog.json) 路径"""
+    return os.path.join(get_book_dir(book_title), "catalog.json")
+
+def load_catalog_cache(book_title: str) -> list:
+    """从本地读取完整的分卷章节目录结构"""
+    path = get_catalog_cache_path(book_title)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list) and len(data) > 0:
+                    return data
+        except Exception:
+            return []
+    return []
+
+def save_catalog_cache(book_title: str, volumes_data: list):
+    """保存完整的分卷章节目录结构到 catalog.json"""
+    path = get_catalog_cache_path(book_title)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(volumes_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"  [!] 保存目录结构缓存失败: {e}")
+
 def get_chapter_dir(book_title: str, vol_name: str) -> str:
     """获取章节所在分卷的路径"""
     safe_vol = sanitize_filename(vol_name)
@@ -450,129 +476,140 @@ async def crawl_lightnovel_to_epub(
 
             print(f"[✓] 书名: {book_title} | 作者: {author}")
 
-            # 1. 优先适配新版卷 Tab（.volume-tabs .volume-tab）点击切换提取机制
-            tab_locator = page.locator(".volume-tabs .volume-tab, .volume-tab")
-            tab_count = await tab_locator.count()
+            # 检查本地是否已存在完整的分卷章节目录缓存，如有则直接载入并跳过网页解析
+            cached_catalog = load_catalog_cache(book_title)
+            if cached_catalog:
+                print(f"[✓] 检测到已完整缓存的章节目录 (catalog.json)，跳过分卷解析步骤。")
+                volumes_data = cached_catalog
+            else:
+                # 1. 优先适配新版卷 Tab（.volume-tabs .volume-tab）点击切换提取机制
+                tab_locator = page.locator(".volume-tabs .volume-tab, .volume-tab")
+                tab_count = await tab_locator.count()
 
-            if tab_count > 0:
-                print(f"[+] 检测到 {tab_count} 个分卷选项卡，开始按序精准提取...")
-                for i in range(tab_count):
-                    try:
-                        current_tab = tab_locator.nth(i)
-
-                        # 获取卷标题
-                        v_title_raw = await current_tab.get_attribute("title") or await current_tab.inner_text()
-                        vol_title = convert_t2s(v_title_raw.strip(), to_simplified) if v_title_raw else f"第{i+1}卷"
-
-                        # 平滑滚动并点击当前卷 Tab，防止 DOM 重新渲染导致页面乱飞
-                        await current_tab.scroll_into_view_if_needed(timeout=2000)
-                        await current_tab.click(timeout=3000, force=True)
-
-                        # 增加等待时间，确保 AJAX/动态数据与 UI 渲染完毕后再进行后续提取
-                        await page.wait_for_timeout(1500)
+                if tab_count > 0:
+                    print(f"[+] 检测到 {tab_count} 个分卷选项卡，开始按序精准提取...")
+                    for i in range(tab_count):
                         try:
-                            await page.wait_for_selector(
-                                ".chapter-grid a, .chapter-grid .chapter, a[href*='/reader/']", 
-                                timeout=4000
-                            )
-                        except Exception:
-                            pass
+                            current_tab = tab_locator.nth(i)
 
-                        # 尝试点击展开目录按钮（如存在）
-                        try:
-                            exp_btn = page.locator(".chapter-expand-button, .expand-catalog, .unfold-btn").first
-                            if await exp_btn.is_visible(timeout=1000):
-                                await exp_btn.click(timeout=2000, force=True)
-                                await page.wait_for_timeout(800)
-                        except Exception:
-                            pass
+                            # 获取卷标题
+                            v_title_raw = await current_tab.get_attribute("title") or await current_tab.inner_text()
+                            vol_title = convert_t2s(v_title_raw.strip(), to_simplified) if v_title_raw else f"第{i+1}卷"
 
-                        # 优先从当前卷网格容器 .chapter-grid 中提取章节链接
-                        ch_links = await page.query_selector_all(".chapter-grid a, .chapter-grid .chapter")
-                        if not ch_links:
-                            ch_links = await page.query_selector_all("a[href*='/reader/'], a[href*='/chapter/']")
+                            # 平滑滚动并点击当前卷 Tab，防止 DOM 重新渲染导致页面乱飞
+                            await current_tab.scroll_into_view_if_needed(timeout=2000)
+                            await current_tab.click(timeout=3000, force=True)
 
-                        chapters = []
-                        seen_urls = set()
-                        for c_link in ch_links:
-                            href = await c_link.get_attribute("href")
-                            if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
-                                continue
-                            full_url = urljoin(DOMAIN, href)
-                            if full_url in seen_urls:
-                                continue
-                            seen_urls.add(full_url)
-
-                            raw_c_title = await c_link.inner_text()
-                            c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
-                            chapters.append({"title": c_title, "url": full_url})
-
-                        if chapters:
-                            volumes_data.append({"vol_title": vol_title, "chapters": chapters})
-                            print(f"  [✓] 成功解析分卷【{vol_title}】，获取 {len(chapters)} 章")
-                    except Exception as e:
-                        print(f"  [!] 提取第 {i+1} 卷数据失败，跳过该卷: {e}")
-
-            # 2. 旧版/传统 DOM 结构分卷解析兜底
-            if not volumes_data:
-                vol_elements = await page.query_selector_all(
-                    ".catalog-volume, .volume-item, .volume-box, .volume-wrap, .volume-list, .volume, .catalog-section, .catalog-group, [class*='volume']"
-                )
-
-                if vol_elements:
-                    for v_idx, vol in enumerate(vol_elements):
-                        vol_title = ""
-                        vol_title_selectors = [
-                            ".volume-title", ".volume-name", ".catalog-volume-title", ".volume-header", "h3", "h4", ".title"
-                        ]
-                        for v_sel in vol_title_selectors:
+                            # 增加等待时间，确保 AJAX/动态数据与 UI 渲染完毕后再进行后续提取
+                            await page.wait_for_timeout(1500)
                             try:
-                                v_raw = await vol.inner_text(v_sel, timeout=800)
-                                if v_raw and v_raw.strip():
-                                    vol_title = convert_t2s(v_raw.strip(), to_simplified)
-                                    break
+                                await page.wait_for_selector(
+                                    ".chapter-grid a, .chapter-grid .chapter, a[href*='/reader/']", 
+                                    timeout=4000
+                                )
                             except Exception:
-                                continue
+                                pass
 
-                        if not vol_title:
-                            vol_title = f"第{v_idx + 1}卷"
+                            # 尝试点击展开目录按钮（如存在）
+                            try:
+                                exp_btn = page.locator(".chapter-expand-button, .expand-catalog, .unfold-btn").first
+                                if await exp_btn.is_visible(timeout=1000):
+                                    await exp_btn.click(timeout=2000, force=True)
+                                    await page.wait_for_timeout(800)
+                            except Exception:
+                                pass
 
-                        ch_links = await vol.query_selector_all("a[href*='/reader/'], a[href*='/chapter/'], a[href*='/detail/'], a.chapter")
-                        chapters = []
-                        for c_link in ch_links:
-                            href = await c_link.get_attribute("href")
-                            if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
-                                continue
-                            raw_c_title = await c_link.inner_text()
-                            c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
-                            full_url = urljoin(DOMAIN, href)
-                            chapters.append({"title": c_title, "url": full_url})
+                            # 优先从当前卷网格容器 .chapter-grid 中提取章节链接
+                            ch_links = await page.query_selector_all(".chapter-grid a, .chapter-grid .chapter")
+                            if not ch_links:
+                                ch_links = await page.query_selector_all("a[href*='/reader/'], a[href*='/chapter/']")
 
-                        if chapters:
-                            volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+                            chapters = []
+                            seen_urls = set()
+                            for c_link in ch_links:
+                                href = await c_link.get_attribute("href")
+                                if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
+                                    continue
+                                full_url = urljoin(DOMAIN, href)
+                                if full_url in seen_urls:
+                                    continue
+                                seen_urls.add(full_url)
 
-            # 3. 强效兜底逻辑：若仍未查找到分卷，全页抽取所有阅读链接归入默认卷
-            if not volumes_data:
-                print("  [!] 未检测到分卷容器，启用全页章节抽取兜底策略...")
-                all_ch_links = await page.query_selector_all(
-                    "a[href*='/reader/'], a[href*='/chapter/'], a[href*='/detail/'], a.chapter"
-                )
-                chapters = []
-                seen_urls = set()
-                for c_link in all_ch_links:
-                    href = await c_link.get_attribute("href")
-                    if not href:
-                        continue
-                    full_url = urljoin(DOMAIN, href)
-                    if full_url in seen_urls:
-                        continue
-                    seen_urls.add(full_url)
-                    raw_c_title = await c_link.inner_text()
-                    c_title = convert_t2s(raw_c_title.strip(), to_simplified) or f"章节 {len(chapters)+1}"
-                    chapters.append({"title": c_title, "url": full_url})
+                                raw_c_title = await c_link.inner_text()
+                                c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
+                                chapters.append({"title": c_title, "url": full_url})
 
-                if chapters:
-                    volumes_data.append({"vol_title": "正文卷", "chapters": chapters})
+                            if chapters:
+                                volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+                                print(f"  [✓] 成功解析分卷【{vol_title}】，获取 {len(chapters)} 章")
+                        except Exception as e:
+                            print(f"  [!] 提取第 {i+1} 卷数据失败，跳过该卷: {e}")
+
+                # 2. 旧版/传统 DOM 结构分卷解析兜底
+                if not volumes_data:
+                    vol_elements = await page.query_selector_all(
+                        ".catalog-volume, .volume-item, .volume-box, .volume-wrap, .volume-list, .volume, .catalog-section, .catalog-group, [class*='volume']"
+                    )
+
+                    if vol_elements:
+                        for v_idx, vol in enumerate(vol_elements):
+                            vol_title = ""
+                            vol_title_selectors = [
+                                ".volume-title", ".volume-name", ".catalog-volume-title", ".volume-header", "h3", "h4", ".title"
+                            ]
+                            for v_sel in vol_title_selectors:
+                                try:
+                                    v_raw = await vol.inner_text(v_sel, timeout=800)
+                                    if v_raw and v_raw.strip():
+                                        vol_title = convert_t2s(v_raw.strip(), to_simplified)
+                                        break
+                                except Exception:
+                                    continue
+
+                            if not vol_title:
+                                vol_title = f"第{v_idx + 1}卷"
+
+                            ch_links = await vol.query_selector_all("a[href*='/reader/'], a[href*='/chapter/'], a[href*='/detail/'], a.chapter")
+                            chapters = []
+                            for c_link in ch_links:
+                                href = await c_link.get_attribute("href")
+                                if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
+                                    continue
+                                raw_c_title = await c_link.inner_text()
+                                c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
+                                full_url = urljoin(DOMAIN, href)
+                                chapters.append({"title": c_title, "url": full_url})
+
+                            if chapters:
+                                volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+
+                # 3. 强效兜底逻辑：若仍未查找到分卷，全页抽取所有阅读链接归入默认卷
+                if not volumes_data:
+                    print("  [!] 未检测到分卷容器，启用全页章节抽取兜底策略...")
+                    all_ch_links = await page.query_selector_all(
+                        "a[href*='/reader/'], a[href*='/chapter/'], a[href*='/detail/'], a.chapter"
+                    )
+                    chapters = []
+                    seen_urls = set()
+                    for c_link in all_ch_links:
+                        href = await c_link.get_attribute("href")
+                        if not href:
+                            continue
+                        full_url = urljoin(DOMAIN, href)
+                        if full_url in seen_urls:
+                            continue
+                        seen_urls.add(full_url)
+                        raw_c_title = await c_link.inner_text()
+                        c_title = convert_t2s(raw_c_title.strip(), to_simplified) or f"章节 {len(chapters)+1}"
+                        chapters.append({"title": c_title, "url": full_url})
+
+                    if chapters:
+                        volumes_data.append({"vol_title": "正文卷", "chapters": chapters})
+
+                # 仅在确认分卷与章节列表全部爬取成功（非空且至少有一章）后才写入 catalog.json 缓存
+                if volumes_data and any(len(v.get("chapters", [])) > 0 for v in volumes_data):
+                    save_catalog_cache(book_title, volumes_data)
+                    print(f"[✓] 分卷及章节列表已完整获取，持久化缓存至: {get_catalog_cache_path(book_title)}")
 
         else:
             # 本地纯缓存读取模式
@@ -606,16 +643,22 @@ async def crawl_lightnovel_to_epub(
                 return []
 
             print(f"[✓] 已定位本地缓存路径: {target_book_dir}")
-            for vol_dname in sorted(os.listdir(target_book_dir)):
-                vol_dpath = os.path.join(target_book_dir, vol_dname)
-                if os.path.isdir(vol_dpath) and vol_dname != "images_mapped":
-                    vol_ch_list = []
-                    for fname in sorted(os.listdir(vol_dpath)):
-                        if fname.endswith(".json"):
-                            ch_title = fname[:-5]
-                            vol_ch_list.append({"title": convert_t2s(ch_title, to_simplified), "url": ""})
-                    if vol_ch_list:
-                        volumes_data.append({"vol_title": convert_t2s(vol_dname, to_simplified), "chapters": vol_ch_list})
+
+            cached_catalog = load_catalog_cache(book_title)
+            if cached_catalog:
+                volumes_data = cached_catalog
+                print(f"[✓] 成功从 catalog.json 加载 {len(volumes_data)} 个分卷结构")
+            else:
+                for vol_dname in sorted(os.listdir(target_book_dir)):
+                    vol_dpath = os.path.join(target_book_dir, vol_dname)
+                    if os.path.isdir(vol_dpath) and vol_dname != "images_mapped":
+                        vol_ch_list = []
+                        for fname in sorted(os.listdir(vol_dpath)):
+                            if fname.endswith(".json"):
+                                ch_title = fname[:-5]
+                                vol_ch_list.append({"title": convert_t2s(ch_title, to_simplified), "url": ""})
+                        if vol_ch_list:
+                            volumes_data.append({"vol_title": convert_t2s(vol_dname, to_simplified), "chapters": vol_ch_list})
 
         downloaded_epubs = []
 
@@ -831,7 +874,7 @@ async def crawl_lightnovel_to_epub(
         return downloaded_epubs
 
 if __name__ == "__main__":
-    bid = sys.argv[1] if len(sys.argv) > 1 else "2143"
+    bid = sys.argv[1] if len(sys.argv) > 1 else "15275"
     asyncio.run(
         crawl_lightnovel_to_epub(
             book_id=bid,
