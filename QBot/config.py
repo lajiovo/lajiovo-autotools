@@ -359,16 +359,60 @@ reset (bool): 是否在检查完后重置标记为 False，默认 True。
 
 返回值：bool
 """
-
-
-import importlib.util
 import sys
+import os
+import io
+import logging
+from logging.handlers import RotatingFileHandler
+import importlib.util
 from pathlib import Path
+
+# 防护措施：必须放在代码最最顶部（在导入任何第三方库或日志模块前）
+# 若当前运行环境无控制台 (sys.stdout/stderr 为 None)，填充 devnull 空流
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+# 当前脚本所在目录及日志文件夹设置
+current_dir = Path(__file__).resolve().parent
+log_dir = current_dir / "log"
+log_dir.mkdir(parents=True, exist_ok=True)
+
+# 轮转日志 Handler，限制单文件不超过 512KB (512 * 1024 bytes)
+log_file = log_dir / "app.log"
+file_handler = RotatingFileHandler(
+    log_file,
+    maxBytes=512 * 1024,  # 512 KB
+    backupCount=5,        # 最多保留 5 个历史归档文件
+    encoding="utf-8"
+)
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s - [%(levelname)s] - %(name)s - %(message)s")
+)
+
+# 配置根 Logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(file_handler)
+
+# 获取上一级目录路径
+parent_dir = current_dir.parent
+
+from pathlib import Path
+
+# 防护措施：必须放在代码最最顶部（在导入任何第三方库或日志模块前）
+# 若当前运行环境无控制台 (sys.stdout/stderr 为 None)，填充 devnull 空流
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 # 获取上一级目录路径
 parent_dir = Path(__file__).resolve().parent.parent
 
 def load_module_from_parent(module_name: str):
+    """动态加载上级目录中的 Python 模块"""
     file_path = parent_dir / f"{module_name}.py"
     if not file_path.exists():
         raise FileNotFoundError(f"未找到模块文件: {file_path}")
@@ -383,16 +427,9 @@ def load_module_from_parent(module_name: str):
 
 # 自动按依赖顺序加载上级目录的模块
 zConfig = load_module_from_parent("zConfig")
-zPerseusLogger = load_module_from_parent("zPerseusLogger")
 
-import io
-
-# 如果处于无控制台（如 pythonw / pyinstaller gui模式），避免标准流为 None
-if sys.stdout is None:
-    sys.stdout = io.StringIO()
-if sys.stderr is None:
-    sys.stderr = io.StringIO()
-
+# 修复：Python 内置 logging 模块正确方法为 getLogger()，而非 get_logger()
+_log = logging.getLogger(__name__)
 
 import os
 import json

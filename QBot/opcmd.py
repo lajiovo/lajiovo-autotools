@@ -5,7 +5,7 @@ import time
 import urllib.parse
 import urllib.request
 from botpy.message import GroupMessage
-from config import BotDataManager, zConfig
+from config import BotDataManager, zConfig,_log
 
 # 尝试导入 psutil 获取系统资源，若未安装则自动降级处理
 try:

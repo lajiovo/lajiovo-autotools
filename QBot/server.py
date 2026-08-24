@@ -6,6 +6,7 @@ import mimetypes
 import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import logging
+from config import _log
 
 # 读取同目录下 key.json 中的明文密码
 KEY_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "key.json")
