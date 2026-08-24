@@ -1,8 +1,10 @@
 import asyncio
 import base64
+import json
+import logging
 import os
 import time
-import logging
+import aiohttp
 
 import botpy
 from botpy.message import C2CMessage, GroupMessage
@@ -12,7 +14,6 @@ from config import (
     APP_ID,
     APP_SECRET,
     zConfig,
-    _log,
     BotDataManager,
     apply_sdk_patch,
 )
@@ -367,29 +368,162 @@ class MyClient(botpy.Client):
     # =========================================================================
     async def api_send_c2c_text(self, user_openid: str, content: str):
         """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录"""
-        try:
-            await self.send_c2c_text(user_openid=user_openid, content=content)
-            # 使用标准的 append_c2c_message 写入，助手角色指定为 assistant
-            self.data_mgr.append_c2c_message(
-                user_id=user_openid, content=content, role="assistant"
-            )
-            return True
-        except Exception as e:
-            logging.error(f"❌ [Server 发送 C2C 消息被拒收/报错] UserOpenID: {user_openid}, 原因: {e}")
-            return False
+    async def call_youzaibot(
+        self,
+        youzai_cmd: str,
+        sender_openid: str,
+        group_id: str = "",
+        is_c2c: bool = False,
+    ):
+        """将指令通过 OneBot v11 协议发送至 YouzaiBot (ws://localhost:2536/) 并获取返回消息"""
+        ws_urls = [
+            "ws://localhost:2536/OneBotv11",
+            "ws://localhost:2536/GSUIDCore",
+            "ws://localhost:2536/OPQBot",
+            "ws://localhost:2536/ComWeChat",
+            "ws://localhost:2536/",
+        ]
 
-    async def api_send_group_text(self, group_openid: str, content: str):
-        """供 Server 调用的主动发送群聊纯文本消息接口，并同步写入聊天记录"""
+        user_id_num = abs(hash(sender_openid)) % (10 ** 8) + 10000
+        group_id_num = (abs(hash(group_id)) % (10 ** 8) + 10000) if group_id else 0
+
+        onebot_event = {
+            "time": int(time.time()),
+            "self_id": 100000,
+            "post_type": "message",
+            "message_type": "private" if is_c2c else "group",
+            "sub_type": "friend" if is_c2c else "normal",
+            "message_id": int(time.time() * 1000) % 1000000,
+            "user_id": user_id_num,
+            "message": youzai_cmd,
+            "raw_message": youzai_cmd,
+            "font": 0,
+            "sender": {
+                "user_id": user_id_num,
+                "nickname": sender_openid[:8],
+                "card": "",
+                "role": "member",
+            },
+        }
+        if not is_c2c:
+            onebot_event["group_id"] = group_id_num
+
+        responses = []
+
         try:
-            await self.send_group_text(group_openid=group_openid, content=content)
-            # 使用标准的 append_group_message 写入
-            self.data_mgr.append_group_message(
-                group_id=group_openid, user_id="BOT", content=content, role="assistant"
-            )
-            return True
+            async with aiohttp.ClientSession() as session:
+                ws = None
+                for url in ws_urls:
+                    try:
+                        ws = await session.ws_connect(url, timeout=2.0)
+                        if ws:
+                            break
+                    except Exception:
+                        continue
+
+                if not ws:
+                    return "❌ 无法连接到 YouzaiBot 服务 (ws://localhost:2536/)"
+
+                await ws.send_str(json.dumps(onebot_event))
+
+                start_wait = time.time()
+                while time.time() - start_wait < 10.0:
+                    try:
+                        msg = await asyncio.wait_for(ws.receive(), timeout=3.0)
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            data = json.loads(msg.data)
+                            parsed_reply = self._parse_onebot_message(data)
+                            if parsed_reply:
+                                responses.append(parsed_reply)
+                                await asyncio.sleep(0.5)
+                                if ws.closed:
+                                    break
+                        elif msg.type in (
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            break
+                    except asyncio.TimeoutError:
+                        if responses:
+                            break
+
+                await ws.close()
+
         except Exception as e:
-            logging.error(f"❌ [Server 发送 Group 消息被拒收/报错] GroupOpenID: {group_openid}, 原因: {e}")
-            return False
+            logging.error(f"YouzaiBot WebSocket 通信异常: {e}")
+            return f"❌ YouzaiBot 通信错误: {e}"
+
+        if not responses:
+            return "⚠️ YouzaiBot 未返回任何响应消息"
+
+        if len(responses) == 1:
+            return responses[0]
+
+        combined_texts = []
+        for resp in responses:
+            if isinstance(resp, dict):
+                return resp
+            elif isinstance(resp, str):
+                combined_texts.append(resp)
+
+        return (
+            "\n".join(combined_texts)
+            if combined_texts
+            else "⚠️ YouzaiBot 未返回有效文本"
+        )
+
+    def _parse_onebot_message(self, data: dict):
+        """解析 OneBot v11 响应数据包，提取文本或富媒体内容"""
+        import re
+
+        raw_msg = None
+        if isinstance(data, dict):
+            if data.get("action") in [
+                "send_group_msg",
+                "send_private_msg",
+                "send_msg",
+            ]:
+                raw_msg = data.get("params", {}).get("message")
+            elif "reply" in data:
+                raw_msg = data.get("reply")
+            elif "message" in data:
+                raw_msg = data.get("message")
+
+        if not raw_msg:
+            return None
+
+        text_parts = []
+        image_url = None
+
+        if isinstance(raw_msg, str):
+            img_match = re.search(
+                r"\[CQ:image,[^\]]*?(?:file|url)=([^,\]]+)[^\]]*\]", raw_msg
+            )
+            if img_match:
+                image_url = img_match.group(1)
+
+            clean_text = re.sub(r"\[CQ:[^\]]+\]", "", raw_msg).strip()
+            if clean_text:
+                text_parts.append(clean_text)
+
+        elif isinstance(raw_msg, list):
+            for seg in raw_msg:
+                if not isinstance(seg, dict):
+                    continue
+                seg_type = seg.get("type")
+                seg_data = seg.get("data", {})
+                if seg_type == "text":
+                    text_parts.append(seg_data.get("text", ""))
+                elif seg_type == "image":
+                    image_url = seg_data.get("url") or seg_data.get("file")
+
+        full_text = "\n".join(text_parts).strip()
+
+        if image_url:
+            return {"msg_type": 7, "url": image_url, "content": full_text}
+        elif full_text:
+            return full_text
+        return None
 
     def _get_group_openid_by_num(self, target_group_num, opsetting: dict = None):
         """获取指定编号对应的群 OpenID
@@ -618,6 +752,21 @@ class MyClient(botpy.Client):
         is_c2c: bool = False,
     ):
         target_id = sender_openid if is_c2c else group_id
+
+        # 针对 #y 开头的指令处理：自动截取 y 及之后的内容转发给 YouzaiBot
+        if content.lower().startswith("#y"):
+            y_idx = content.lower().find("y")
+            youzai_cmd = content[y_idx:]
+            youzai_res = await self.call_youzaibot(
+                youzai_cmd, sender_openid, group_id=group_id, is_c2c=is_c2c
+            )
+            if isinstance(youzai_res, dict):
+                await self.send_reply(
+                    youzai_res, target_id, raw_message.id, is_c2c=is_c2c
+                )
+                return None
+            return youzai_res
+
         parts = content[1:].strip().split()
         cmd = parts[0].lower() if parts else ""
 
