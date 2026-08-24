@@ -28,6 +28,273 @@ TARGET_BOT_PREFIX = zConfig.get_config("bot.target_bot_prefix")
 apply_sdk_patch()
 
 
+class YouzaiWSClient:
+    """Yunzai / YouzaiBot 长连接 WebSocket 管理器，维持常驻在线与心跳机制"""
+
+    def __init__(self, bot_client):
+        self.bot_client = bot_client
+        self.session = None
+        self.ws = None
+        self.is_connected = False
+        self.self_id = 985211
+        self._loop_task = None
+        self._heartbeat_task = None
+        self.active_listeners = []  # 正在等待响应的请求队列列表
+
+    def _get_self_id(self):
+        opsetting = self.bot_client.data_mgr.get_opsetting()
+        configured_self_id = opsetting.get("youzai_self_id") or zConfig.get_config("bot.youzai_self_id", None)
+        if configured_self_id and str(configured_self_id).isdigit():
+            return int(configured_self_id)
+        elif configured_self_id:
+            return configured_self_id
+        return 985211
+
+    async def start(self):
+        """启动长连接后台任务"""
+        if not self._loop_task or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._ws_maintain_loop())
+
+    async def _ws_maintain_loop(self):
+        """后台持续维护 WebSocket 保持长期在线"""
+        ws_urls = [
+            "ws://localhost:2536/OneBotv11",
+            "ws://localhost:2536/GSUIDCore",
+            "ws://localhost:2536/OPQBot",
+            "ws://localhost:2536/ComWeChat",
+            "ws://localhost:2536/",
+        ]
+
+        while True:
+            try:
+                if not self.session or self.session.closed:
+                    self.session = aiohttp.ClientSession()
+
+                ws = None
+                for url in ws_urls:
+                    try:
+                        ws = await self.session.ws_connect(url, timeout=3.0)
+                        if ws:
+                            logging.info(f"🟢 [YouzaiBot] 成功建立持久 WebSocket 通信连接 ({url})")
+                            break
+                    except Exception:
+                        continue
+
+                if not ws:
+                    await asyncio.sleep(5)
+                    continue
+
+                self.ws = ws
+                self.is_connected = True
+                self.self_id = self._get_self_id()
+
+                # 发送 go-cqhttp 上线宣告与初始心跳
+                await self._send_connect_meta()
+
+                # 启动后台定期心跳协程
+                if self._heartbeat_task and not self._heartbeat_task.done():
+                    self._heartbeat_task.cancel()
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+                # 持续监听收包
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(msg.data)
+                            await self._handle_incoming_packet(data)
+                        except Exception as e:
+                            logging.error(f"[YouzaiBot WS] 数据包处理异常: {e}")
+                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        break
+
+            except Exception as e:
+                logging.warning(f"⚠️ [YouzaiBot WS] 连接中断: {e}")
+            finally:
+                self.is_connected = False
+                self.ws = None
+                if self._heartbeat_task and not self._heartbeat_task.done():
+                    self._heartbeat_task.cancel()
+                await asyncio.sleep(3)  # 3秒后尝试重连
+
+    async def _send_connect_meta(self):
+        if not self.ws or self.ws.closed:
+            return
+        now_ts = int(time.time())
+        lifecycle_event = {
+            "time": now_ts,
+            "self_id": self.self_id,
+            "post_type": "meta_event",
+            "meta_event_type": "lifecycle",
+            "sub_type": "connect",
+        }
+        heartbeat_event = {
+            "time": now_ts,
+            "self_id": self.self_id,
+            "post_type": "meta_event",
+            "meta_event_type": "heartbeat",
+            "status": {
+                "app_initialized": True,
+                "app_enabled": True,
+                "app_good": True,
+                "online": True,
+                "good": True,
+            },
+            "interval": 5000,
+        }
+        await self.ws.send_str(json.dumps(lifecycle_event))
+        await self.ws.send_str(json.dumps(heartbeat_event))
+
+    async def _heartbeat_loop(self):
+        """每 5 秒自动推送心跳包，保持长连接处于 active 激活状态"""
+        while self.is_connected and self.ws and not self.ws.closed:
+            try:
+                await asyncio.sleep(5)
+                now_ts = int(time.time())
+                heartbeat_event = {
+                    "time": now_ts,
+                    "self_id": self.self_id,
+                    "post_type": "meta_event",
+                    "meta_event_type": "heartbeat",
+                    "status": {
+                        "app_initialized": True,
+                        "app_enabled": True,
+                        "app_good": True,
+                        "online": True,
+                        "good": True,
+                    },
+                    "interval": 5000,
+                }
+                await self.ws.send_str(json.dumps(heartbeat_event))
+            except Exception:
+                break
+
+    async def _handle_incoming_packet(self, data: dict):
+        if not isinstance(data, dict):
+            return
+
+        # 1. 响应 Yunzai 对 Client 的 API 请求 (必须带 echo 才能解决 Yunzai 超时报错)
+        if "action" in data and "echo" in data:
+            action = data.get("action")
+            echo = data.get("echo")
+
+            parsed_reply = self.bot_client._parse_onebot_message(data)
+            if parsed_reply:
+                self._dispatch_to_listeners(parsed_reply)
+
+            res_data = {}
+            if action in ["get_login_info", "get_version_info"]:
+                res_data = {
+                    "user_id": self.self_id,
+                    "nickname": "QQBot",
+                    "app_name": "go-cqhttp",
+                    "app_version": "v1.2.0",
+                }
+            elif action == "get_friend_list":
+                res_data = []
+            elif action == "get_group_list":
+                res_data = [{"group_id": 97361482, "group_name": "Group_97361482"}]
+            elif action == "get_group_member_list":
+                res_data = [{"group_id": 97361482, "user_id": 53729962, "nickname": "53729962", "card": "", "role": "member"}]
+            elif action == "get_group_info":
+                res_data = {"group_id": 97361482, "group_name": "Group_97361482"}
+            elif action == "get_group_member_info":
+                res_data = {"group_id": 97361482, "user_id": 53729962, "nickname": "53729962", "card": "", "role": "member"}
+            elif action in ["send_group_msg", "send_private_msg", "send_msg"]:
+                res_data = {"message_id": int(time.time() * 1000) % 1000000}
+            elif "list" in action or "map" in action.lower():
+                res_data = []
+
+            res_pkg = {
+                "status": "ok",
+                "retcode": 0,
+                "data": res_data,
+                "echo": echo,
+            }
+            if self.ws and not self.ws.closed:
+                await self.ws.send_str(json.dumps(res_pkg))
+            return
+
+        # 2. 普通推包/回复解析
+        parsed_reply = self.bot_client._parse_onebot_message(data)
+        if parsed_reply:
+            self._dispatch_to_listeners(parsed_reply)
+
+    def _dispatch_to_listeners(self, reply):
+        for listener_queue in self.active_listeners:
+            listener_queue.put_nowait(reply)
+
+    async def send_command(self, youzai_cmd: str, sender_openid: str, group_id: str = "", is_c2c: bool = False):
+        if not self.is_connected or not self.ws or self.ws.closed:
+            # 尝试快速等待 1 秒
+            await asyncio.sleep(1)
+            if not self.is_connected or not self.ws or self.ws.closed:
+                return "❌ 无法连接到 YouzaiBot 服务 (ws://localhost:2536/)"
+
+        user_id_num = self.bot_client._get_or_create_fake_user_id(sender_openid)
+        group_id_num = (abs(hash(group_id)) % (10 ** 8) + 10000) if group_id else 0
+        now_ts = int(time.time())
+
+        # 构造并发送 OneBot v11 消息事件
+        onebot_event = {
+            "time": now_ts,
+            "self_id": self.self_id,
+            "post_type": "message",
+            "message_type": "private" if is_c2c else "group",
+            "sub_type": "friend" if is_c2c else "normal",
+            "message_id": int(time.time() * 1000) % 1000000,
+            "user_id": user_id_num,
+            "message": youzai_cmd,
+            "raw_message": youzai_cmd,
+            "font": 0,
+            "sender": {
+                "user_id": user_id_num,
+                "nickname": str(user_id_num),
+                "card": "",
+                "role": "member",
+            },
+        }
+        if not is_c2c:
+            onebot_event["group_id"] = group_id_num
+
+        # 挂载局部监听队列收集响应
+        listener_queue = asyncio.Queue()
+        self.active_listeners.append(listener_queue)
+
+        try:
+            await self.ws.send_str(json.dumps(onebot_event))
+
+            responses = []
+            start_wait = time.time()
+
+            # 循环收集响应消息 (最多等待 10 秒)
+            while time.time() - start_wait < 10.0:
+                try:
+                    resp = await asyncio.wait_for(listener_queue.get(), timeout=2.5)
+                    responses.append(resp)
+                except asyncio.TimeoutError:
+                    if responses:
+                        break
+
+            if not responses:
+                return "⚠️ YouzaiBot 未返回任何响应消息"
+
+            if len(responses) == 1:
+                return responses[0]
+
+            combined_texts = []
+            for resp in responses:
+                if isinstance(resp, dict):
+                    return resp
+                elif isinstance(resp, str):
+                    combined_texts.append(resp)
+
+            return "\n".join(combined_texts) if combined_texts else "⚠️ YouzaiBot 未返回有效文本"
+
+        finally:
+            if listener_queue in self.active_listeners:
+                self.active_listeners.remove(listener_queue)
+
+
 class MyClient(botpy.Client):
 
     # =========================================================================
@@ -39,11 +306,13 @@ class MyClient(botpy.Client):
         self.bot_loop = None
         self.data_mgr = BotDataManager()
         self.game_sys = GameSystem(self.data_mgr)
+        self.youzai_mgr = YouzaiWSClient(self)  # 初始化 YouzaiBot 长连接管理器
 
     async def on_ready(self):
         logging.info(f"robot 「{self.robot.name}」 已成功上线！")
         self.bot_loop = asyncio.get_running_loop()
         start_http_servers(self)
+        await self.youzai_mgr.start()  # 启动 YouzaiBot 持久 WebSocket 通信任务
         await self.notify_group_3("🟢 机器人已上线并准备就绪！")
 
     # =========================================================================
@@ -371,28 +640,22 @@ class MyClient(botpy.Client):
         if not user_openid:
             return 100001
 
-        # 1. 尝试从 user_info 中读取已保存的 fake_user_id
         user_info = self.data_mgr.get_user_info(user_openid) or {}
         fake_id = user_info.get("fake_user_id")
 
-        # 2. 若不存在，随机生成 8 位符合条件的假数字 ID 并写入 user_info 与 user_data
         if not fake_id:
             import random
             fake_id = random.randint(10000000, 99999999)
 
-            # 更新用户信息落盘
             user_info["fake_user_id"] = fake_id
             self.data_mgr.set_user_info(user_openid, user_info)
 
-            # 更新用户扩展数据落盘
             user_data = self.data_mgr.get_user_data(user_openid) or {}
             user_data["fake_user_id"] = fake_id
             self.data_mgr.set_user_data(user_openid, user_data)
 
         return int(fake_id)
 
-    async def api_send_c2c_text(self, user_openid: str, content: str):
-        """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录"""
     async def call_youzaibot(
         self,
         youzai_cmd: str,
@@ -400,178 +663,12 @@ class MyClient(botpy.Client):
         group_id: str = "",
         is_c2c: bool = False,
     ):
-        """将指令通过 OneBot v11 协议发送至 YouzaiBot (ws://localhost:2536/) 并获取返回消息"""
-        ws_urls = [
-            "ws://localhost:2536/OneBotv11",
-            "ws://localhost:2536/GSUIDCore",
-            "ws://localhost:2536/OPQBot",
-            "ws://localhost:2536/ComWeChat",
-            "ws://localhost:2536/",
-        ]
-
-        # 1. 优先读取 opsetting 或 zConfig 中的 youzai_self_id 配置
-        opsetting = self.data_mgr.get_opsetting()
-        configured_self_id = (
-            opsetting.get("youzai_self_id")
-            or zConfig.get_config("bot.youzai_self_id", None)
-        )
-
-        user_id_num = self._get_or_create_fake_user_id(sender_openid)
-        group_id_num = (abs(hash(group_id)) % (10 ** 8) + 10000) if group_id else 0
-
-        responses = []
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                ws = None
-                for url in ws_urls:
-                    try:
-                        ws = await session.ws_connect(url, timeout=2.0)
-                        if ws:
-                            break
-                    except Exception:
-                        continue
-
-                if not ws:
-                    return "❌ 无法连接到 YouzaiBot 服务 (ws://localhost:2536/)"
-
-                # 2. self_id 固定为 985211 (或从配置中获取)
-                if configured_self_id and str(configured_self_id).isdigit():
-                    self_id = int(configured_self_id)
-                elif configured_self_id:
-                    self_id = configured_self_id
-                else:
-                    self_id = 985211
-
-                # 3. 仿照 go-cqhttp 协议底层的生命周期 (lifecycle) 与心跳 (heartbeat) 事件，模拟宣告机器人上线登入
-                now_ts = int(time.time())
-                lifecycle_event = {
-                    "time": now_ts,
-                    "self_id": self_id,
-                    "post_type": "meta_event",
-                    "meta_event_type": "lifecycle",
-                    "sub_type": "connect",
-                }
-                heartbeat_event = {
-                    "time": now_ts,
-                    "self_id": self_id,
-                    "post_type": "meta_event",
-                    "meta_event_type": "heartbeat",
-                    "status": {
-                        "app_initialized": True,
-                        "app_enabled": True,
-                        "app_good": True,
-                        "online": True,
-                        "good": True,
-                    },
-                    "interval": 5000,
-                }
-
-                await ws.send_str(json.dumps(lifecycle_event))
-                await ws.send_str(json.dumps(heartbeat_event))
-                await asyncio.sleep(0.05)
-
-                # 4. 构造并发送 OneBot v11 消息事件
-                onebot_event = {
-                    "time": now_ts,
-                    "self_id": self_id,
-                    "post_type": "message",
-                    "message_type": "private" if is_c2c else "group",
-                    "sub_type": "friend" if is_c2c else "normal",
-                    "message_id": int(time.time() * 1000) % 1000000,
-                    "user_id": user_id_num,
-                    "message": youzai_cmd,
-                    "raw_message": youzai_cmd,
-                    "font": 0,
-                    "sender": {
-                        "user_id": user_id_num,
-                        "nickname": str(user_id_num),
-                        "card": "",
-                        "role": "member",
-                    },
-                }
-                if not is_c2c:
-                    onebot_event["group_id"] = group_id_num
-
-                await ws.send_str(json.dumps(onebot_event))
-
-                # 5. 循环接收响应消息，并自动响应 Yunzai 的 API 反向查询 (如 get_login_info, _set_model_show, send_group_msg 等)
-                start_wait = time.time()
-                while time.time() - start_wait < 10.0:
-                    try:
-                        msg = await asyncio.wait_for(ws.receive(), timeout=3.0)
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            data = json.loads(msg.data)
-
-                            # 响应 Yunzai 对 go-cqhttp 底层接口的所有 API 请求 (凡包含 action 与 echo 均需应答，防止 Yunzai 端超时报错)
-                            if isinstance(data, dict) and "action" in data and "echo" in data:
-                                action = data.get("action")
-                                echo = data.get("echo")
-
-                                # 若为消息发送类 action，提取其中蕴含的响应文本或图片
-                                parsed_reply = self._parse_onebot_message(data)
-                                if parsed_reply:
-                                    responses.append(parsed_reply)
-
-                                # 构造对应 action 的合规 data 字段，确保 Yunzai 读取 data 时不报 TypeError
-                                res_data = {}
-                                if action in ["get_login_info", "get_version_info"]:
-                                    res_data = {
-                                        "user_id": self_id,
-                                        "nickname": "QQBot",
-                                        "app_name": "go-cqhttp",
-                                        "app_version": "v1.2.0",
-                                    }
-                                elif action in ["send_group_msg", "send_private_msg", "send_msg"]:
-                                    res_data = {"message_id": int(time.time() * 1000) % 1000000}
-
-                                res_pkg = {
-                                    "status": "ok",
-                                    "retcode": 0,
-                                    "data": res_data,
-                                    "echo": echo,
-                                }
-                                await ws.send_str(json.dumps(res_pkg))
-                                if parsed_reply:
-                                    await asyncio.sleep(0.3)
-                                continue
-
-                            parsed_reply = self._parse_onebot_message(data)
-                            if parsed_reply:
-                                responses.append(parsed_reply)
-                                await asyncio.sleep(0.3)
-                        elif msg.type in (
-                            aiohttp.WSMsgType.CLOSED,
-                            aiohttp.WSMsgType.ERROR,
-                        ):
-                            break
-                    except asyncio.TimeoutError:
-                        if responses:
-                            break
-
-                await ws.close()
-
-        except Exception as e:
-            logging.error(f"YouzaiBot WebSocket 通信异常: {e}")
-            return f"❌ YouzaiBot 通信错误: {e}"
-
-        if not responses:
-            return "⚠️ YouzaiBot 未返回任何响应消息"
-
-        if len(responses) == 1:
-            return responses[0]
-
-        combined_texts = []
-        for resp in responses:
-            if isinstance(resp, dict):
-                return resp
-            elif isinstance(resp, str):
-                combined_texts.append(resp)
-
-        return (
-            "\n".join(combined_texts)
-            if combined_texts
-            else "⚠️ YouzaiBot 未返回有效文本"
+        """通过常驻长连接 WebSocket 发送指令给 YouzaiBot"""
+        return await self.youzai_mgr.send_command(
+            youzai_cmd=youzai_cmd,
+            sender_openid=sender_openid,
+            group_id=group_id,
+            is_c2c=is_c2c,
         )
 
     def _parse_onebot_message(self, data: dict):
@@ -638,18 +735,14 @@ class MyClient(botpy.Client):
         if opsetting is None:
             opsetting = self.data_mgr.get_opsetting()
 
-        # 1. 优先从 opsetting 的 group_tags 读取
         group_tags = opsetting.get("group_tags", {})
         if isinstance(group_tags, dict):
-            # 兼容 {"1": "openid_xxx"} 格式
             if eff_str in group_tags and isinstance(group_tags[eff_str], str):
                 return group_tags[eff_str]
-            # 兼容 {"openid_xxx": 1} 或 {"openid_xxx": "1"} 格式
             for gid, tag in group_tags.items():
                 if str(tag) == eff_str:
                     return gid
 
-        # 2. 其次从 groupinfo (get_group_list / get_group_tag) 中读取
         group_list = self.data_mgr.get_group_list()
         for g_info in group_list:
             gid = g_info.get("group_id")
@@ -668,11 +761,9 @@ class MyClient(botpy.Client):
 
     async def notify_group_3(self, message: str):
         """上下线通知群（从 opsetting 读取提醒群编号，默认群 3；优先 opsetting 读取 group_tags，其次 groupinfo）"""
-        # 1. 从 opsetting 中读取提醒群编号
         opsetting = self.data_mgr.get_opsetting()
         target_group_num = opsetting.get("notify_group_num", 3)
 
-        # 2. 定位 OpenID：优先 opsetting["group_tags"]，其次 groupinfo
         target_openid = self._get_group_openid_by_num(target_group_num, opsetting)
 
         if target_openid:
@@ -709,18 +800,15 @@ class MyClient(botpy.Client):
             logging.info("ℹ️ Push 功能已关闭，跳过推送。")
             return
 
-        # 1. 从 opsetting 读取默认推送群配置
         opsetting = self.data_mgr.get_opsetting()
         default_push_group = opsetting.get("push_target_group", None)
 
         target_openid, warning_msg = None, ""
         effective_group_num = target_group_num or default_push_group
 
-        # 2. 定位 OpenID：优先 opsetting["group_tags"]，其次 groupinfo
         if effective_group_num:
             target_openid = self._get_group_openid_by_num(effective_group_num, opsetting)
 
-        # 3. 如果未定位到对应的群，降级寻找绑定的群 1
         if not target_openid:
             target_openid = self._get_group_openid_by_num(1, opsetting)
 
@@ -735,7 +823,6 @@ class MyClient(botpy.Client):
 
         full_content = f"{msg_content}{warning_msg}"
 
-        # 4. 使用标准的 append_push_history 接口追加记录
         self.data_mgr.append_push_history({
             "target_group": effective_group_num,
             "target_openid": target_openid,
@@ -834,7 +921,6 @@ class MyClient(botpy.Client):
                     msg_id=msg_id,
                 )
 
-        # 自动记录机器人的回复 ( role 使用 assistant )
         if reply_content:
             if is_c2c:
                 self.data_mgr.append_c2c_message(
@@ -871,7 +957,6 @@ class MyClient(botpy.Client):
         parts = content[1:].strip().split()
         cmd = parts[0].lower() if parts else ""
 
-        # #op 指令分发与动态消息类型处理
         if cmd == "op":
             op_res = self.handle_op_command(
                 parts[1:], sender_openid, raw_message, group_id
@@ -901,35 +986,28 @@ class MyClient(botpy.Client):
                 uptime_str += f"{minutes}分"
             uptime_str += f"{seconds}秒"
 
-            # 使用标准的 is_system_active 检查激活状态
             system_active = self.data_mgr.is_system_active()
             status_text = "正常开启" if system_active else "暂停维护中"
             return (
                 f"Pong! 机器人正常运行中 ⚡\n当前服务状态：{status_text}\n已连续运行：{uptime_str}"
             )
 
-        # 维护状态下，直接返回 None，不响应其他指令
         if not self.data_mgr.is_system_active():
             return None
 
-        # ------------------- #game 等其他指令分发与动态消息类型处理 -------------------
         game_res = self.game_sys.handle_command(cmd, parts, sender_openid)
 
-        # 支持 handle_command 返回字典格式，灵活判定 msg_type
         if isinstance(game_res, dict):
             await self.send_reply(game_res, target_id, raw_message.id, is_c2c=is_c2c)
             return None
 
-        # 若返回普通字符串，则交给 _handle_group_msg / _handle_c2c_msg 发送纯文本消息
         return game_res
 
     # =========================================================================
     # 6. 事件接收与回调处理 (群消息 & 私聊消息)
     # =========================================================================
     def _extract_message_extra(self, message: object) -> dict:
-        """从单聊/群聊消息事件对象中提取丰富的结构化元数据
-        包含: message_type, member_role, mentions, scene_ext (msg_idx, ref_msg_idx), attachments, ark_data, msg_elements, username
-        """
+        """从单聊/群聊消息事件对象中提取丰富的结构化元数据"""
         def _to_dict(obj):
             if isinstance(obj, dict):
                 return obj
@@ -939,11 +1017,9 @@ class MyClient(botpy.Client):
 
         raw = _to_dict(message)
         
-        # 1. 基础字段解析
         msg_type = getattr(message, "message_type", raw.get("message_type", 0)) or 0
         timestamp = getattr(message, "timestamp", raw.get("timestamp", ""))
         
-        # 2. 解析 message_scene 中的 ext 列表 (key=value 格式)
         scene_obj = getattr(message, "message_scene", raw.get("message_scene"))
         scene_dict = _to_dict(scene_obj) if scene_obj else {}
         ext_list = getattr(scene_obj, "ext", scene_dict.get("ext", [])) or []
@@ -953,14 +1029,12 @@ class MyClient(botpy.Client):
                 k, v = item.split("=", 1)
                 scene_ext[k.strip()] = v.strip()
 
-        # 3. 解析作者信息与群身份
         author_obj = getattr(message, "author", raw.get("author"))
         author_dict = _to_dict(author_obj) if author_obj else {}
         username = getattr(author_obj, "username", author_dict.get("username", ""))
         member_role = getattr(author_obj, "member_role", author_dict.get("member_role", "member"))
         is_bot = getattr(author_obj, "bot", author_dict.get("bot", False))
 
-        # 4. 解析 @成员列表 mentions
         mentions_raw = getattr(message, "mentions", raw.get("mentions", [])) or []
         mentions = []
         for m in mentions_raw:
@@ -971,7 +1045,6 @@ class MyClient(botpy.Client):
                 "bot": getattr(m, "bot", m_dict.get("bot", False)),
             })
 
-        # 5. 解析附件 attachments
         attachments_raw = getattr(message, "attachments", raw.get("attachments", [])) or []
         attachments = []
         for att in attachments_raw:
@@ -987,7 +1060,6 @@ class MyClient(botpy.Client):
                 "asr_refer_text": getattr(att, "asr_refer_text", att_dict.get("asr_refer_text", "")),
             })
 
-        # 6. 解析结构化卡片 ark_data
         ark_obj = getattr(message, "ark_data", raw.get("ark_data"))
         ark_data = {}
         if ark_obj:
@@ -999,7 +1071,6 @@ class MyClient(botpy.Client):
                 "fields": getattr(ark_obj, "fields", ark_dict.get("fields", {})),
             }
 
-        # 7. 解析引用/合并消息元素 msg_elements
         elements_raw = getattr(message, "msg_elements", raw.get("msg_elements", [])) or []
         msg_elements = []
         for elem in elements_raw:
@@ -1036,10 +1107,8 @@ class MyClient(botpy.Client):
         )
         sender_openid = sender_openid.upper()
 
-        # 提取扩展信息
         extra = self._extract_message_extra(message)
         
-        # 若正文为空，根据卡片/附件/引用/合并消息生成丰富可读的内容描述
         full_content = content
         if extra["ark_data"]:
             ark = extra["ark_data"]
@@ -1066,17 +1135,14 @@ class MyClient(botpy.Client):
             f"msg_idx: {extra['msg_idx']} | 内容: {full_content}"
         )
 
-        # 自动记录接收到的群聊消息（传入 sender_openid 自动记录/更新用户信息）
         if full_content:
             self.data_mgr.append_group_message(
                 group_id=group_id, user_id=sender_openid, content=full_content, role="user"
             )
 
-        # 如果消息开头为 TARGET_BOT_PREFIX，移除 @ 后自动去除开头的多余空格
         if content.startswith(TARGET_BOT_PREFIX):
             content = content[len(TARGET_BOT_PREFIX) :].strip()
 
-        # 校验并归一化指令前缀，支持 #、/、/# 开头
         if content.startswith("/#"):
             content = "#" + content[2:].lstrip("#").strip()
         elif content.startswith(("#", "/")):
@@ -1086,12 +1152,11 @@ class MyClient(botpy.Client):
             reply_text = await self.process_command(
                 content, sender_openid, message, group_id, is_c2c=False
             )
-            if reply_text:  # 仅在有返回文字时才进行普通消息发送
+            if reply_text:
                 try:
                     await self.api.post_group_message(
                         group_openid=group_id, msg_type=0, msg_id=msg_id, content=reply_text
                     )
-                    # 自动记录机器人的文本回复
                     self.data_mgr.append_group_message(
                         group_id=group_id, user_id="BOT", content=reply_text, role="assistant"
                     )
@@ -1107,10 +1172,8 @@ class MyClient(botpy.Client):
         )
         sender_openid = sender_openid.upper()
 
-        # 提取扩展信息
         extra = self._extract_message_extra(message)
         
-        # 若正文为空，根据卡片/附件/引用/合并消息生成丰富可读的内容描述
         full_content = content
         if extra["ark_data"]:
             ark = extra["ark_data"]
@@ -1138,13 +1201,11 @@ class MyClient(botpy.Client):
             f"内容: {full_content}"
         )
 
-        # 自动记录接收到的私聊消息
         if full_content:
             self.data_mgr.append_c2c_message(
                 user_id=sender_openid, content=full_content, role="user"
             )
 
-        # 校验并归一化指令前缀，支持 #、/、/# 开头
         if content.startswith("/#"):
             content = "#" + content[2:].lstrip("#").strip()
         elif content.startswith(("#", "/")):
@@ -1159,7 +1220,6 @@ class MyClient(botpy.Client):
                     await self.send_c2c_text(
                         user_openid=sender_openid, content=reply_text, msg_id=msg_id
                     )
-                    # 自动记录机器人的文本回复
                     self.data_mgr.append_c2c_message(
                         user_id=sender_openid, content=reply_text, role="assistant"
                     )

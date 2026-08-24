@@ -10,6 +10,7 @@ botdata/
 Novels/
 browser_downloads/
 yunzai/
+log/
 
 # 2. 忽略特定扩展名的文件
 *.log
