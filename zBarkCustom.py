@@ -22,8 +22,7 @@ def forward_push(title: str, msg: str):
     
     # 将 msg 和 group 拼接为 URL 查询参数并进行安全转码
     params = urllib.parse.urlencode({
-        "msg": full_msg,
-        "group": "3"
+        "msg": full_msg
     })
     
     url = f"http://127.0.0.1:25567/push?{params}"
@@ -63,7 +62,7 @@ def PerseusErrorMsg(main: str, msg: str):
 
 def PerseusNotifyMsg(main: str, msg: str):
     title = f"Notice:{main}"
-    forward_push(title, msg)
+    # forward_push(title, msg)
     return barkall(DEVICEKEYLIST,
         title=title,
         body=msg,
