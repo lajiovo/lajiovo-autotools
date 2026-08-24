@@ -62,7 +62,8 @@ def PerseusErrorMsg(main: str, msg: str):
 
 def PerseusNotifyMsg(main: str, msg: str):
     title = f"Notice:{main}"
-    # forward_push(title, msg)
+    forward_push(title, msg)
+    """
     return barkall(DEVICEKEYLIST,
         title=title,
         body=msg,
@@ -71,6 +72,8 @@ def PerseusNotifyMsg(main: str, msg: str):
         level="passive",
         icon=ICON2
         )
+        """
+    return []
 
 def CustomMsg(title: str, msg: str, group: str):
     forward_push(title, msg)
