@@ -30,8 +30,50 @@ class DataMgrAdapter:
     """对 BotDataManager 接口进行统一适配，确保数据读取与保存的安全兼容"""
 
     @staticmethod
+    def get_opsetting(data_mgr) -> dict:
+        """获取当前系统的完整 OP 配置 (opsetting)"""
+        if hasattr(data_mgr, "get_opsetting"):
+            return data_mgr.get_opsetting() or {}
+        return {}
+
+    @staticmethod
+    def set_opsetting(data_mgr, setting_dict: dict):
+        """更新并直接落盘保存 opsetting"""
+        if hasattr(data_mgr, "set_opsetting"):
+            data_mgr.set_opsetting(setting_dict)
+        else:
+            for k, v in setting_dict.items():
+                if hasattr(data_mgr, "set_extra_data"):
+                    data_mgr.set_extra_data(k, v)
+            DataMgrAdapter.save_opsetting(data_mgr)
+
+    @staticmethod
+    def save_opsetting(data_mgr):
+        """统一保存 OP 设置数据 (opsetting)"""
+        if hasattr(data_mgr, "save_opsetting"):
+            data_mgr.save_opsetting()
+        elif hasattr(data_mgr, "save_op_setting"):
+            data_mgr.save_op_setting()
+        elif hasattr(data_mgr, "save"):
+            data_mgr.save()
+
+    @staticmethod
+    def save_groupinfo(data_mgr):
+        """统一保存群组信息 (groupinfo)"""
+        if hasattr(data_mgr, "save_groupinfo"):
+            data_mgr.save_groupinfo()
+        elif hasattr(data_mgr, "save_group_info"):
+            data_mgr.save_group_info()
+        elif hasattr(data_mgr, "save"):
+            data_mgr.save()
+
+    @staticmethod
     def get_op_list(data_mgr) -> set:
         """获取 OP 管理员集合"""
+        if hasattr(data_mgr, "get_opsetting"):
+            setting = data_mgr.get_opsetting()
+            if setting and "op_list" in setting:
+                return set(setting.get("op_list", []))
         if hasattr(data_mgr, "get_op_list"):
             return set(data_mgr.get_op_list())
         raw = data_mgr.get_extra_data("op_list", [BotDataManager.DEFAULT_OP])
@@ -47,19 +89,31 @@ class DataMgrAdapter:
 
     @staticmethod
     def add_op(data_mgr, openid: str):
-        """添加新 OP 管理员并保存"""
-        if hasattr(data_mgr, "add_op"):
+        """添加新 OP 管理员并保存至 opsetting"""
+        if hasattr(data_mgr, "get_opsetting") and hasattr(data_mgr, "set_opsetting"):
+            setting = data_mgr.get_opsetting() or {}
+            op_set = set(setting.get("op_list", []))
+            op_set.add(openid.upper())
+            setting["op_list"] = list(op_set)
+            data_mgr.set_opsetting(setting)
+        elif hasattr(data_mgr, "add_op"):
             data_mgr.add_op(openid)
         else:
             op_set = DataMgrAdapter.get_op_list(data_mgr)
             op_set.add(openid.upper())
             data_mgr.set_extra_data("op_list", list(op_set))
-        DataMgrAdapter.save(data_mgr)
+            DataMgrAdapter.save_opsetting(data_mgr)
 
     @staticmethod
     def remove_op(data_mgr, openid: str):
-        """移除 OP 管理员并保存"""
-        if hasattr(data_mgr, "remove_op"):
+        """移除 OP 管理员并保存至 opsetting"""
+        if hasattr(data_mgr, "get_opsetting") and hasattr(data_mgr, "set_opsetting"):
+            setting = data_mgr.get_opsetting() or {}
+            op_set = set(setting.get("op_list", []))
+            op_set.discard(openid.upper())
+            setting["op_list"] = list(op_set)
+            data_mgr.set_opsetting(setting)
+        elif hasattr(data_mgr, "remove_op"):
             data_mgr.remove_op(openid)
         elif hasattr(data_mgr, "del_op"):
             data_mgr.del_op(openid)
@@ -67,29 +121,47 @@ class DataMgrAdapter:
             op_set = DataMgrAdapter.get_op_list(data_mgr)
             op_set.discard(openid.upper())
             data_mgr.set_extra_data("op_list", list(op_set))
-        DataMgrAdapter.save(data_mgr)
+            DataMgrAdapter.save_opsetting(data_mgr)
 
     @staticmethod
     def get_group_tags(data_mgr) -> dict:
         """获取群编号绑定映射字典"""
+        if hasattr(data_mgr, "get_opsetting"):
+            setting = data_mgr.get_opsetting()
+            if setting and "group_tags" in setting:
+                return setting.get("group_tags", {})
         if hasattr(data_mgr, "get_group_tags"):
             return data_mgr.get_group_tags()
         return data_mgr.get_extra_data("group_tags", {})
 
     @staticmethod
     def set_group_tag(data_mgr, group_id: str, tag_num: int):
-        """设置群编号绑定记录"""
+        """设置群编号绑定记录（同时存入 opsetting 和 groupinfo）"""
         tags = DataMgrAdapter.get_group_tags(data_mgr)
         tags[group_id] = tag_num
-        if hasattr(data_mgr, "set_group_tags"):
+
+        # 持久化至 opsetting
+        if hasattr(data_mgr, "get_opsetting") and hasattr(data_mgr, "set_opsetting"):
+            setting = data_mgr.get_opsetting() or {}
+            setting["group_tags"] = tags
+            data_mgr.set_opsetting(setting)
+        elif hasattr(data_mgr, "set_group_tags"):
             data_mgr.set_group_tags(tags)
+            DataMgrAdapter.save_opsetting(data_mgr)
         else:
             data_mgr.set_extra_data("group_tags", tags)
-        DataMgrAdapter.save(data_mgr)
+            DataMgrAdapter.save_opsetting(data_mgr)
+
+        # 同时持久化至 groupinfo
+        DataMgrAdapter.save_groupinfo(data_mgr)
 
     @staticmethod
     def get_target_port(data_mgr, default: int = 25566) -> int:
         """获取后台服务通讯端口"""
+        if hasattr(data_mgr, "get_opsetting"):
+            setting = data_mgr.get_opsetting()
+            if setting and "target_port" in setting:
+                return setting.get("target_port", default)
         if hasattr(data_mgr, "get_target_port"):
             return data_mgr.get_target_port()
         return data_mgr.get_extra_data("target_port", default)
@@ -97,45 +169,69 @@ class DataMgrAdapter:
     @staticmethod
     def get_notify_group_num(data_mgr, default: int = 2) -> int:
         """获取上下线通知群编号"""
+        if hasattr(data_mgr, "get_opsetting"):
+            setting = data_mgr.get_opsetting()
+            if setting and "notify_group_num" in setting:
+                return setting.get("notify_group_num", default)
         if hasattr(data_mgr, "get_notify_group_num"):
             return data_mgr.get_notify_group_num()
         return data_mgr.get_extra_data("notify_group_num", default)
 
     @staticmethod
     def set_notify_group_num(data_mgr, num: int):
-        """设置上下线通知群编号"""
-        if hasattr(data_mgr, "set_notify_group_num"):
+        """设置上下线通知群编号（存入 opsetting）"""
+        if hasattr(data_mgr, "get_opsetting") and hasattr(data_mgr, "set_opsetting"):
+            setting = data_mgr.get_opsetting() or {}
+            setting["notify_group_num"] = num
+            data_mgr.set_opsetting(setting)
+        elif hasattr(data_mgr, "set_notify_group_num"):
             data_mgr.set_notify_group_num(num)
+            DataMgrAdapter.save_opsetting(data_mgr)
         else:
             data_mgr.set_extra_data("notify_group_num", num)
-        DataMgrAdapter.save(data_mgr)
+            DataMgrAdapter.save_opsetting(data_mgr)
 
     @staticmethod
     def set_system_active(data_mgr, active: bool):
-        """设置系统运行/维护状态"""
-        if hasattr(data_mgr, "set_system_active"):
+        """设置系统运行/维护状态（存入 opsetting）"""
+        if hasattr(data_mgr, "get_opsetting") and hasattr(data_mgr, "set_opsetting"):
+            setting = data_mgr.get_opsetting() or {}
+            setting["system_active"] = active
+            data_mgr.set_opsetting(setting)
+        elif hasattr(data_mgr, "set_system_active"):
             data_mgr.set_system_active(active)
+            DataMgrAdapter.save_opsetting(data_mgr)
         else:
             data_mgr.set_extra_data("system_active", active)
-        DataMgrAdapter.save(data_mgr)
+            DataMgrAdapter.save_opsetting(data_mgr)
 
     @staticmethod
     def set_push_target_group(data_mgr, num: int):
-        """设置 Push 转发接收群编号"""
-        if hasattr(data_mgr, "set_push_target_group"):
+        """设置 Push 转发接收群编号（存入 opsetting）"""
+        if hasattr(data_mgr, "get_opsetting") and hasattr(data_mgr, "set_opsetting"):
+            setting = data_mgr.get_opsetting() or {}
+            setting["push_target_group"] = num
+            data_mgr.set_opsetting(setting)
+        elif hasattr(data_mgr, "set_push_target_group"):
             data_mgr.set_push_target_group(num)
+            DataMgrAdapter.save_opsetting(data_mgr)
         else:
             data_mgr.set_extra_data("push_target_group", num)
-        DataMgrAdapter.save(data_mgr)
+            DataMgrAdapter.save_opsetting(data_mgr)
 
     @staticmethod
     def set_push_active(data_mgr, active: bool):
-        """设置 Push 转发开启/关闭"""
-        if hasattr(data_mgr, "set_push_active"):
+        """设置 Push 转发开启/关闭（存入 opsetting）"""
+        if hasattr(data_mgr, "get_opsetting") and hasattr(data_mgr, "set_opsetting"):
+            setting = data_mgr.get_opsetting() or {}
+            setting["push_active"] = active
+            data_mgr.set_opsetting(setting)
+        elif hasattr(data_mgr, "set_push_active"):
             data_mgr.set_push_active(active)
+            DataMgrAdapter.save_opsetting(data_mgr)
         else:
             data_mgr.set_extra_data("push_active", active)
-        DataMgrAdapter.save(data_mgr)
+            DataMgrAdapter.save_opsetting(data_mgr)
 
     @staticmethod
     def get_push_history(data_mgr):
@@ -149,10 +245,7 @@ class DataMgrAdapter:
     @staticmethod
     def save(data_mgr):
         """统一持久化数据保存"""
-        if hasattr(data_mgr, "save_opsetting"):
-            data_mgr.save_opsetting()
-        elif hasattr(data_mgr, "save"):
-            data_mgr.save()
+        DataMgrAdapter.save_opsetting(data_mgr)
 
 
 def _sanitize_path(path_str: str) -> str:

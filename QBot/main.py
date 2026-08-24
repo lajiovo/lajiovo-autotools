@@ -390,24 +390,53 @@ class MyClient(botpy.Client):
             logging.error(f"❌ [Server 发送 Group 消息被拒收/报错] GroupOpenID: {group_openid}, 原因: {e}")
             return False
 
-    async def notify_group_3(self, message: str):
-        """上下线通知群（从 opsetting / extra 读取提醒群编号，默认群 3）"""
-        # 1. 从 opsetting 或 extra 中获取提醒群编号
-        opsetting = self.data_mgr.get_opsetting()
-        target_group_num = opsetting.get(
-            "notify_group_num", self.data_mgr.get_extra_data("notify_group_num", 3)
-        )
+    def _get_group_openid_by_num(self, target_group_num, opsetting: dict = None):
+        """获取指定编号对应的群 OpenID
+        查找优先级：优先从 opsetting["group_tags"] 读取，其次从 groupinfo (get_group_list/get_group_tag) 读取
+        """
+        if target_group_num is None:
+            return None
 
-        # 2. 从 get_group_list() 找到对应编号的群 openid
+        eff_str = str(target_group_num)
+        if opsetting is None:
+            opsetting = self.data_mgr.get_opsetting()
+
+        # 1. 优先从 opsetting 的 group_tags 读取
+        group_tags = opsetting.get("group_tags", {})
+        if isinstance(group_tags, dict):
+            # 兼容 {"1": "openid_xxx"} 格式
+            if eff_str in group_tags and isinstance(group_tags[eff_str], str):
+                return group_tags[eff_str]
+            # 兼容 {"openid_xxx": 1} 或 {"openid_xxx": "1"} 格式
+            for gid, tag in group_tags.items():
+                if str(tag) == eff_str:
+                    return gid
+
+        # 2. 其次从 groupinfo (get_group_list / get_group_tag) 中读取
         group_list = self.data_mgr.get_group_list()
-        target_openid = None
         for g_info in group_list:
+            gid = g_info.get("group_id")
             tag_num = g_info.get("tag_num")
             grouptag = g_info.get("grouptag")
-            if (tag_num is not None and str(tag_num) == str(target_group_num)) or \
-               (grouptag is not None and str(grouptag) == str(target_group_num)):
-                target_openid = g_info.get("group_id")
-                break
+            direct_tag = self.data_mgr.get_group_tag(gid) if gid else ""
+
+            if (
+                (tag_num is not None and str(tag_num) == eff_str)
+                or (grouptag is not None and str(grouptag) == eff_str)
+                or (direct_tag and str(direct_tag) == eff_str)
+            ):
+                return gid
+
+        return None
+
+    async def notify_group_3(self, message: str):
+        """上下线通知群（从 opsetting 读取提醒群编号，默认群 3；优先 opsetting 读取 group_tags，其次 groupinfo）"""
+        # 1. 从 opsetting 中读取提醒群编号
+        opsetting = self.data_mgr.get_opsetting()
+        target_group_num = opsetting.get("notify_group_num", 3)
+
+        # 2. 定位 OpenID：优先 opsetting["group_tags"]，其次 groupinfo
+        target_openid = self._get_group_openid_by_num(target_group_num, opsetting)
 
         if target_openid:
             try:
@@ -443,37 +472,20 @@ class MyClient(botpy.Client):
             logging.info("ℹ️ Push 功能已关闭，跳过推送。")
             return
 
-        # 1. 读取默认推送群配置
+        # 1. 从 opsetting 读取默认推送群配置
         opsetting = self.data_mgr.get_opsetting()
-        default_push_group = opsetting.get(
-            "push_target_group",
-            self.data_mgr.get_extra_data("push_target_group", None),
-        )
+        default_push_group = opsetting.get("push_target_group", None)
 
         target_openid, warning_msg = None, ""
         effective_group_num = target_group_num or default_push_group
 
-        # 2. 查询已绑定的群聊列表并定位 openid
-        group_list = self.data_mgr.get_group_list()
+        # 2. 定位 OpenID：优先 opsetting["group_tags"]，其次 groupinfo
         if effective_group_num:
-            eff_str = str(effective_group_num)
-            for g_info in group_list:
-                tag_num = g_info.get("tag_num")
-                grouptag = g_info.get("grouptag")
-                if (tag_num is not None and str(tag_num) == eff_str) or \
-                   (grouptag is not None and str(grouptag) == eff_str):
-                    target_openid = g_info.get("group_id")
-                    break
+            target_openid = self._get_group_openid_by_num(effective_group_num, opsetting)
 
         # 3. 如果未定位到对应的群，降级寻找绑定的群 1
         if not target_openid:
-            for g_info in group_list:
-                tag_num = g_info.get("tag_num")
-                grouptag = g_info.get("grouptag")
-                if (tag_num is not None and str(tag_num) == "1") or \
-                   (grouptag is not None and str(grouptag) == "1"):
-                    target_openid = g_info.get("group_id")
-                    break
+            target_openid = self._get_group_openid_by_num(1, opsetting)
 
             if effective_group_num and target_openid:
                 warning_msg = f"\n\n⚠️ [系统提示] 未找到绑定的群 {effective_group_num}，已默认推送至群 1"
@@ -486,7 +498,7 @@ class MyClient(botpy.Client):
 
         full_content = f"{msg_content}{warning_msg}"
 
-        # 4. 使用标准的 append_push_history 接口追加记录（自动注入 timestamp 自动落盘）
+        # 4. 使用标准的 append_push_history 接口追加记录
         self.data_mgr.append_push_history({
             "target_group": effective_group_num,
             "target_openid": target_openid,
