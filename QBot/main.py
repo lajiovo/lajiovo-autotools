@@ -485,7 +485,7 @@ class MyClient(botpy.Client):
                     "font": 0,
                     "sender": {
                         "user_id": user_id_num,
-                        "nickname": sender_openid[:8],
+                        "nickname": str(user_id_num),
                         "card": "",
                         "role": "member",
                     },
@@ -495,7 +495,7 @@ class MyClient(botpy.Client):
 
                 await ws.send_str(json.dumps(onebot_event))
 
-                # 5. 循环接收响应消息，并自动响应 Yunzai 的 API 反向查询 (如 get_login_info)
+                # 5. 循环接收响应消息，并自动响应 Yunzai 的 API 反向查询 (如 get_login_info, _set_model_show, send_group_msg 等)
                 start_wait = time.time()
                 while time.time() - start_wait < 10.0:
                     try:
@@ -503,31 +503,43 @@ class MyClient(botpy.Client):
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
 
-                            # 响应 Yunzai 对 go-cqhttp 底层接口的探查请求
+                            # 响应 Yunzai 对 go-cqhttp 底层接口的所有 API 请求 (凡包含 action 与 echo 均需应答，防止 Yunzai 端超时报错)
                             if isinstance(data, dict) and "action" in data and "echo" in data:
                                 action = data.get("action")
                                 echo = data.get("echo")
+
+                                # 若为消息发送类 action，提取其中蕴含的响应文本或图片
+                                parsed_reply = self._parse_onebot_message(data)
+                                if parsed_reply:
+                                    responses.append(parsed_reply)
+
+                                # 构造对应 action 的合规 data 字段，确保 Yunzai 读取 data 时不报 TypeError
+                                res_data = {}
                                 if action in ["get_login_info", "get_version_info"]:
-                                    res_pkg = {
-                                        "status": "ok",
-                                        "retcode": 0,
-                                        "data": {
-                                            "user_id": self_id,
-                                            "nickname": "QQBot",
-                                            "app_name": "go-cqhttp",
-                                            "app_version": "v1.2.0",
-                                        },
-                                        "echo": echo,
+                                    res_data = {
+                                        "user_id": self_id,
+                                        "nickname": "QQBot",
+                                        "app_name": "go-cqhttp",
+                                        "app_version": "v1.2.0",
                                     }
-                                    await ws.send_str(json.dumps(res_pkg))
-                                    continue
+                                elif action in ["send_group_msg", "send_private_msg", "send_msg"]:
+                                    res_data = {"message_id": int(time.time() * 1000) % 1000000}
+
+                                res_pkg = {
+                                    "status": "ok",
+                                    "retcode": 0,
+                                    "data": res_data,
+                                    "echo": echo,
+                                }
+                                await ws.send_str(json.dumps(res_pkg))
+                                if parsed_reply:
+                                    await asyncio.sleep(0.3)
+                                continue
 
                             parsed_reply = self._parse_onebot_message(data)
                             if parsed_reply:
                                 responses.append(parsed_reply)
-                                await asyncio.sleep(0.5)
-                                if ws.closed:
-                                    break
+                                await asyncio.sleep(0.3)
                         elif msg.type in (
                             aiohttp.WSMsgType.CLOSED,
                             aiohttp.WSMsgType.ERROR,
