@@ -366,6 +366,31 @@ class MyClient(botpy.Client):
     # =========================================================================
     # 4. SERVER / 外部调用与系统辅助
     # =========================================================================
+    def _get_or_create_fake_user_id(self, user_openid: str) -> int:
+        """获取或随机生成用户的符合条件的假用户 ID (8 位数字)，并通过 data_mgr 接口持久化落盘"""
+        if not user_openid:
+            return 100001
+
+        # 1. 尝试从 user_info 中读取已保存的 fake_user_id
+        user_info = self.data_mgr.get_user_info(user_openid) or {}
+        fake_id = user_info.get("fake_user_id")
+
+        # 2. 若不存在，随机生成 8 位符合条件的假数字 ID 并写入 user_info 与 user_data
+        if not fake_id:
+            import random
+            fake_id = random.randint(10000000, 99999999)
+
+            # 更新用户信息落盘
+            user_info["fake_user_id"] = fake_id
+            self.data_mgr.set_user_info(user_openid, user_info)
+
+            # 更新用户扩展数据落盘
+            user_data = self.data_mgr.get_user_data(user_openid) or {}
+            user_data["fake_user_id"] = fake_id
+            self.data_mgr.set_user_data(user_openid, user_data)
+
+        return int(fake_id)
+
     async def api_send_c2c_text(self, user_openid: str, content: str):
         """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录"""
     async def call_youzaibot(
@@ -384,29 +409,15 @@ class MyClient(botpy.Client):
             "ws://localhost:2536/",
         ]
 
-        user_id_num = abs(hash(sender_openid)) % (10 ** 8) + 10000
-        group_id_num = (abs(hash(group_id)) % (10 ** 8) + 10000) if group_id else 0
+        # 1. 优先读取 opsetting 或 zConfig 中的 youzai_self_id 配置
+        opsetting = self.data_mgr.get_opsetting()
+        configured_self_id = (
+            opsetting.get("youzai_self_id")
+            or zConfig.get_config("bot.youzai_self_id", None)
+        )
 
-        onebot_event = {
-            "time": int(time.time()),
-            "self_id": 100000,
-            "post_type": "message",
-            "message_type": "private" if is_c2c else "group",
-            "sub_type": "friend" if is_c2c else "normal",
-            "message_id": int(time.time() * 1000) % 1000000,
-            "user_id": user_id_num,
-            "message": youzai_cmd,
-            "raw_message": youzai_cmd,
-            "font": 0,
-            "sender": {
-                "user_id": user_id_num,
-                "nickname": sender_openid[:8],
-                "card": "",
-                "role": "member",
-            },
-        }
-        if not is_c2c:
-            onebot_event["group_id"] = group_id_num
+        user_id_num = self._get_or_create_fake_user_id(sender_openid)
+        group_id_num = (abs(hash(group_id)) % (10 ** 8) + 10000) if group_id else 0
 
         responses = []
 
@@ -424,14 +435,93 @@ class MyClient(botpy.Client):
                 if not ws:
                     return "❌ 无法连接到 YouzaiBot 服务 (ws://localhost:2536/)"
 
+                # 2. self_id 固定为 985211 (或从配置中获取)
+                if configured_self_id and str(configured_self_id).isdigit():
+                    self_id = int(configured_self_id)
+                elif configured_self_id:
+                    self_id = configured_self_id
+                else:
+                    self_id = 985211
+
+                # 3. 仿照 go-cqhttp 协议底层的生命周期 (lifecycle) 与心跳 (heartbeat) 事件，模拟宣告机器人上线登入
+                now_ts = int(time.time())
+                lifecycle_event = {
+                    "time": now_ts,
+                    "self_id": self_id,
+                    "post_type": "meta_event",
+                    "meta_event_type": "lifecycle",
+                    "sub_type": "connect",
+                }
+                heartbeat_event = {
+                    "time": now_ts,
+                    "self_id": self_id,
+                    "post_type": "meta_event",
+                    "meta_event_type": "heartbeat",
+                    "status": {
+                        "app_initialized": True,
+                        "app_enabled": True,
+                        "app_good": True,
+                        "online": True,
+                        "good": True,
+                    },
+                    "interval": 5000,
+                }
+
+                await ws.send_str(json.dumps(lifecycle_event))
+                await ws.send_str(json.dumps(heartbeat_event))
+                await asyncio.sleep(0.05)
+
+                # 4. 构造并发送 OneBot v11 消息事件
+                onebot_event = {
+                    "time": now_ts,
+                    "self_id": self_id,
+                    "post_type": "message",
+                    "message_type": "private" if is_c2c else "group",
+                    "sub_type": "friend" if is_c2c else "normal",
+                    "message_id": int(time.time() * 1000) % 1000000,
+                    "user_id": user_id_num,
+                    "message": youzai_cmd,
+                    "raw_message": youzai_cmd,
+                    "font": 0,
+                    "sender": {
+                        "user_id": user_id_num,
+                        "nickname": sender_openid[:8],
+                        "card": "",
+                        "role": "member",
+                    },
+                }
+                if not is_c2c:
+                    onebot_event["group_id"] = group_id_num
+
                 await ws.send_str(json.dumps(onebot_event))
 
+                # 5. 循环接收响应消息，并自动响应 Yunzai 的 API 反向查询 (如 get_login_info)
                 start_wait = time.time()
                 while time.time() - start_wait < 10.0:
                     try:
                         msg = await asyncio.wait_for(ws.receive(), timeout=3.0)
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
+
+                            # 响应 Yunzai 对 go-cqhttp 底层接口的探查请求
+                            if isinstance(data, dict) and "action" in data and "echo" in data:
+                                action = data.get("action")
+                                echo = data.get("echo")
+                                if action in ["get_login_info", "get_version_info"]:
+                                    res_pkg = {
+                                        "status": "ok",
+                                        "retcode": 0,
+                                        "data": {
+                                            "user_id": self_id,
+                                            "nickname": "QQBot",
+                                            "app_name": "go-cqhttp",
+                                            "app_version": "v1.2.0",
+                                        },
+                                        "echo": echo,
+                                    }
+                                    await ws.send_str(json.dumps(res_pkg))
+                                    continue
+
                             parsed_reply = self._parse_onebot_message(data)
                             if parsed_reply:
                                 responses.append(parsed_reply)
@@ -753,10 +843,9 @@ class MyClient(botpy.Client):
     ):
         target_id = sender_openid if is_c2c else group_id
 
-        # 针对 #y 开头的指令处理：自动截取 y 及之后的内容转发给 YouzaiBot
+        # 针对 #y 开头的指令处理：自动截取 #y 之后的内容 (xxx) 转发给 YouzaiBot
         if content.lower().startswith("#y"):
-            y_idx = content.lower().find("y")
-            youzai_cmd = content[y_idx:]
+            youzai_cmd = content[2:].strip()
             youzai_res = await self.call_youzaibot(
                 youzai_cmd, sender_openid, group_id=group_id, is_c2c=is_c2c
             )
@@ -825,6 +914,106 @@ class MyClient(botpy.Client):
     # =========================================================================
     # 6. 事件接收与回调处理 (群消息 & 私聊消息)
     # =========================================================================
+    def _extract_message_extra(self, message: object) -> dict:
+        """从单聊/群聊消息事件对象中提取丰富的结构化元数据
+        包含: message_type, member_role, mentions, scene_ext (msg_idx, ref_msg_idx), attachments, ark_data, msg_elements, username
+        """
+        def _to_dict(obj):
+            if isinstance(obj, dict):
+                return obj
+            if hasattr(obj, "__dict__"):
+                return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
+            return {}
+
+        raw = _to_dict(message)
+        
+        # 1. 基础字段解析
+        msg_type = getattr(message, "message_type", raw.get("message_type", 0)) or 0
+        timestamp = getattr(message, "timestamp", raw.get("timestamp", ""))
+        
+        # 2. 解析 message_scene 中的 ext 列表 (key=value 格式)
+        scene_obj = getattr(message, "message_scene", raw.get("message_scene"))
+        scene_dict = _to_dict(scene_obj) if scene_obj else {}
+        ext_list = getattr(scene_obj, "ext", scene_dict.get("ext", [])) or []
+        scene_ext = {}
+        for item in ext_list:
+            if isinstance(item, str) and "=" in item:
+                k, v = item.split("=", 1)
+                scene_ext[k.strip()] = v.strip()
+
+        # 3. 解析作者信息与群身份
+        author_obj = getattr(message, "author", raw.get("author"))
+        author_dict = _to_dict(author_obj) if author_obj else {}
+        username = getattr(author_obj, "username", author_dict.get("username", ""))
+        member_role = getattr(author_obj, "member_role", author_dict.get("member_role", "member"))
+        is_bot = getattr(author_obj, "bot", author_dict.get("bot", False))
+
+        # 4. 解析 @成员列表 mentions
+        mentions_raw = getattr(message, "mentions", raw.get("mentions", [])) or []
+        mentions = []
+        for m in mentions_raw:
+            m_dict = _to_dict(m)
+            mentions.append({
+                "id": getattr(m, "id", m_dict.get("id", "")),
+                "username": getattr(m, "username", m_dict.get("username", "")),
+                "bot": getattr(m, "bot", m_dict.get("bot", False)),
+            })
+
+        # 5. 解析附件 attachments
+        attachments_raw = getattr(message, "attachments", raw.get("attachments", [])) or []
+        attachments = []
+        for att in attachments_raw:
+            att_dict = _to_dict(att)
+            attachments.append({
+                "url": getattr(att, "url", att_dict.get("url", "")),
+                "filename": getattr(att, "filename", att_dict.get("filename", "")),
+                "content_type": getattr(att, "content_type", att_dict.get("content_type", "")),
+                "size": getattr(att, "size", att_dict.get("size", 0)),
+                "width": getattr(att, "width", att_dict.get("width", 0)),
+                "height": getattr(att, "height", att_dict.get("height", 0)),
+                "voice_wav_url": getattr(att, "voice_wav_url", att_dict.get("voice_wav_url", "")),
+                "asr_refer_text": getattr(att, "asr_refer_text", att_dict.get("asr_refer_text", "")),
+            })
+
+        # 6. 解析结构化卡片 ark_data
+        ark_obj = getattr(message, "ark_data", raw.get("ark_data"))
+        ark_data = {}
+        if ark_obj:
+            ark_dict = _to_dict(ark_obj)
+            ark_data = {
+                "prompt": getattr(ark_obj, "prompt", ark_dict.get("prompt", "")),
+                "ark_type": getattr(ark_obj, "ark_type", ark_dict.get("ark_type", "")),
+                "ark_name": getattr(ark_obj, "ark_name", ark_dict.get("ark_name", "")),
+                "fields": getattr(ark_obj, "fields", ark_dict.get("fields", {})),
+            }
+
+        # 7. 解析引用/合并消息元素 msg_elements
+        elements_raw = getattr(message, "msg_elements", raw.get("msg_elements", [])) or []
+        msg_elements = []
+        for elem in elements_raw:
+            elem_dict = _to_dict(elem)
+            msg_elements.append({
+                "msg_idx": getattr(elem, "msg_idx", elem_dict.get("msg_idx", "")),
+                "message_type": getattr(elem, "message_type", elem_dict.get("message_type", 0)),
+                "content": getattr(elem, "content", elem_dict.get("content", "")),
+            })
+
+        return {
+            "message_type": msg_type,
+            "timestamp": timestamp,
+            "username": username,
+            "member_role": member_role,
+            "is_bot": is_bot,
+            "mentions": mentions,
+            "scene_ext": scene_ext,
+            "msg_idx": scene_ext.get("msg_idx", ""),
+            "ref_msg_idx": scene_ext.get("ref_msg_idx", ""),
+            "auth_token": scene_ext.get("auth_token", ""),
+            "attachments": attachments,
+            "ark_data": ark_data,
+            "msg_elements": msg_elements,
+        }
+
     async def _handle_group_msg(self, message: GroupMessage, event_name: str):
         content = getattr(message, "content", "").strip()
         group_id = getattr(message, "group_openid", "")
@@ -835,15 +1024,40 @@ class MyClient(botpy.Client):
         )
         sender_openid = sender_openid.upper()
 
+        # 提取扩展信息
+        extra = self._extract_message_extra(message)
+        
+        # 若正文为空，根据卡片/附件/引用/合并消息生成丰富可读的内容描述
+        full_content = content
+        if extra["ark_data"]:
+            ark = extra["ark_data"]
+            title = ark.get("fields", {}).get("title") or ark.get("prompt") or ""
+            full_content = f"[卡片:{ark.get('ark_name','未知卡片')}] {title} {content}".strip()
+        elif extra["msg_elements"]:
+            ref_texts = [e["content"] for e in extra["msg_elements"] if e.get("content")]
+            if ref_texts:
+                full_content = f"[引用/合并消息: \"{' | '.join(ref_texts)}\"] {content}".strip()
+        elif extra["attachments"]:
+            att_descs = []
+            for att in extra["attachments"]:
+                if att.get("asr_refer_text"):
+                    att_descs.append(f"[语音: {att['asr_refer_text']}]")
+                elif "image" in att.get("content_type", ""):
+                    att_descs.append(f"[图片: {att.get('url','')}]")
+                else:
+                    att_descs.append(f"[文件: {att.get('filename','')}]")
+            full_content = f"{' '.join(att_descs)} {content}".strip()
+
         logging.info(
-            f"[{event_name}] 群消息 | 群ID: {group_id} | 发送者: {sender_openid} |"
-            f" 内容: {content}"
+            f"[{event_name}] 群消息 | 群ID: {group_id} | 发送者: {sender_openid} "
+            f"({extra.get('username') or '无昵称'} | 角色: {extra['member_role']}) | 类型: {extra['message_type']} | "
+            f"msg_idx: {extra['msg_idx']} | 内容: {full_content}"
         )
 
         # 自动记录接收到的群聊消息（传入 sender_openid 自动记录/更新用户信息）
-        if content:
+        if full_content:
             self.data_mgr.append_group_message(
-                group_id=group_id, user_id=sender_openid, content=content, role="user"
+                group_id=group_id, user_id=sender_openid, content=full_content, role="user"
             )
 
         # 如果消息开头为 TARGET_BOT_PREFIX，移除 @ 后自动去除开头的多余空格
@@ -881,14 +1095,41 @@ class MyClient(botpy.Client):
         )
         sender_openid = sender_openid.upper()
 
+        # 提取扩展信息
+        extra = self._extract_message_extra(message)
+        
+        # 若正文为空，根据卡片/附件/引用/合并消息生成丰富可读的内容描述
+        full_content = content
+        if extra["ark_data"]:
+            ark = extra["ark_data"]
+            title = ark.get("fields", {}).get("title") or ark.get("prompt") or ""
+            full_content = f"[卡片:{ark.get('ark_name','未知卡片')}] {title} {content}".strip()
+        elif extra["msg_elements"]:
+            ref_texts = [e["content"] for e in extra["msg_elements"] if e.get("content")]
+            if ref_texts:
+                full_content = f"[引用/合并消息: \"{' | '.join(ref_texts)}\"] {content}".strip()
+        elif extra["attachments"]:
+            att_descs = []
+            for att in extra["attachments"]:
+                if att.get("asr_refer_text"):
+                    att_descs.append(f"[语音: {att['asr_refer_text']}]")
+                elif "image" in att.get("content_type", ""):
+                    att_descs.append(f"[图片: {att.get('url','')}]")
+                else:
+                    att_descs.append(f"[文件: {att.get('filename','')}]")
+            full_content = f"{' '.join(att_descs)} {content}".strip()
+
         logging.info(
-            f"[{event_name}] 单聊消息 | 发送者: {sender_openid} | 内容: {content}"
+            f"[{event_name}] 单聊消息 | 发送者: {sender_openid} "
+            f"({extra.get('username') or '无昵称'}) | 类型: {extra['message_type']} | "
+            f"msg_idx: {extra['msg_idx']} | ref_msg_idx: {extra['ref_msg_idx']} | "
+            f"内容: {full_content}"
         )
 
         # 自动记录接收到的私聊消息
-        if content:
+        if full_content:
             self.data_mgr.append_c2c_message(
-                user_id=sender_openid, content=content, role="user"
+                user_id=sender_openid, content=full_content, role="user"
             )
 
         # 校验并归一化指令前缀，支持 #、/、/# 开头
