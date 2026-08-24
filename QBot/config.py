@@ -385,6 +385,15 @@ def load_module_from_parent(module_name: str):
 zConfig = load_module_from_parent("zConfig")
 zPerseusLogger = load_module_from_parent("zPerseusLogger")
 
+import io
+
+# 如果处于无控制台（如 pythonw / pyinstaller gui模式），避免标准流为 None
+if sys.stdout is None:
+    sys.stdout = io.StringIO()
+if sys.stderr is None:
+    sys.stderr = io.StringIO()
+
+
 import os
 import json
 import time

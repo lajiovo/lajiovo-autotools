@@ -1,3 +1,15 @@
+# LK 爬虫
+# 匹配器参考
+"""
+<section class="detail-layout" data-v-d3b51b4c="">
+<span class="pc-book-cover detail-cover" data-v-d3b51b4c="" data-v-a25ab8f9=""><img class="pc-book-cover-img" src="https://api.lightnovel.fun/upload-files/images/251228/802d7061f5281f162f77301a2ef19ef2.jpg?m=vQfsXFdeB-94pjnA5kcVLQ&amp;t=8000000000" alt="不时轻声地以俄语遮羞的邻座艾莉同学" loading="lazy" decoding="async" data-v-a25ab8f9=""><!--[--><!--]--></span>
+<div class="detail-info" data-v-d3b51b4c=""><div class="pills" data-v-d3b51b4c=""><span class="pill hot" data-v-d3b51b4c="">连载中</span><!--[--><!--]--></div><h1 data-v-d3b51b4c="">不时轻声地以俄语遮羞的邻座艾莉同学</h1><p data-v-d3b51b4c="">书名：不时轻声地以俄语遮羞的邻座艾莉同学11[font=webfont, 微软雅黑, "Micr</p><div class="detail-info-line" data-v-d3b51b4c=""><span data-v-d3b51b4c="">作者：<strong data-v-d3b51b4c="">灿灿SUN</strong></span><span data-v-d3b51b4c="">插画：<strong data-v-d3b51b4c="">未知</strong></span><span data-v-d3b51b4c="">发布：<strong data-v-d3b51b4c="">初月屿</strong></span><span data-v-d3b51b4c="">状态：<strong data-v-d3b51b4c="">连载中</strong></span></div><div class="detail-soft-stats" data-v-d3b51b4c=""><!----><!----></div><div class="detail-tag-row" data-v-d3b51b4c=""><!--[--><a href="/cn/search?title=%E6%A0%A1%E5%9B%AD&amp;query=%E6%A0%A1%E5%9B%AD&amp;keyword=%E6%A0%A1%E5%9B%AD&amp;source=category_tag&amp;primary_tag=&amp;word_count_bucket=all&amp;status_bucket=all&amp;sort=relevance&amp;preset=" class="" data-v-d3b51b4c="">校园</a><!--]--></div><div class="detail-actions" data-v-d3b51b4c=""><button class="web-button primary" type="button" data-v-d3b51b4c="">开始阅读</button><button class="web-button shelf-action" type="button" data-v-d3b51b4c="">加入书架</button><button class="web-button" type="button" data-v-d3b51b4c="">举报</button></div></div>
+<section class="chapter-box" data-v-d3b51b4c=""><div class="section-heading" data-v-d3b51b4c=""><h2 data-v-d3b51b4c="">目录</h2><div class="chapter-head-tools" data-v-d3b51b4c=""><span data-v-d3b51b4c="">18 章 · 最近更新 7 个月前</span><button type="button" class="chapter-icon-button" aria-label="切换为卷封面视图" title="切换为卷封面视图" data-v-d3b51b4c=""><svg viewBox="0 0 24 24" aria-hidden="true" data-v-d3b51b4c=""><path d="M5 5h14v14H5z" data-v-d3b51b4c=""></path><path d="M8 8h8v6H8z" data-v-d3b51b4c=""></path><path d="M8 17h8" data-v-d3b51b4c=""></path></svg></button><button class="chapter-icon-button" type="button" aria-label="切换为倒序" title="切换为倒序" data-v-d3b51b4c=""><svg viewBox="0 0 24 24" aria-hidden="true" data-v-d3b51b4c=""><path d="M8 6h10" data-v-d3b51b4c=""></path><path d="M8 12h7" data-v-d3b51b4c=""></path><path d="M8 18h4" data-v-d3b51b4c=""></path><path d="M4 6v12" data-v-d3b51b4c=""></path><path d="m2 16 2 2 2-2" data-v-d3b51b4c=""></path></svg></button></div></div><div class="volume-tabs" aria-label="卷选择" data-v-d3b51b4c=""><!--[--><button class="volume-tab active" type="button" title="10卷[自翻]" data-v-d3b51b4c="">10卷[自翻]</button><button class="volume-tab" type="button" title="11卷[自翻]" data-v-d3b51b4c="">11卷[自翻]</button><!--]--></div><!----><div class="chapter-grid" data-v-d3b51b4c=""><!--[--><a data-v-d3b51b4c="" href="/cn/reader/4387/84098" class="chapter active"><!----><span data-v-d3b51b4c="">卷首信息</span></a><a data-v-d3b51b4c="" href="/cn/reader/4387/84100" class="chapter"><!----><span data-v-d3b51b4c="">序章 妹妹模式、开放</span></a><a data-v-d3b51b4c="" href="/cn/reader/4387/84101" class="chapter"><!----><span data-v-d3b51b4c="">第一话 震撼吧，对我这压倒性的可爱感召——</span></a><a data-v-d3b51b4c="" href="/cn/reader/4387/84102" class="chapter"><!----><span data-v-d3b51b4c="">第二话 绫乃是空气</span></a><a data-v-d3b51b4c="" href="/cn/reader/4387/84103" class="chapter"><!----><span data-v-d3b51b4c="">第三话 只是在床上相拥言爱罢了，有问题吗</span></a><a data-v-d3b51b4c="" href="/cn/reader/4387/84107" class="chapter"><!----><span data-v-d3b51b4c="">第四话 艾莉的大脑几度遭受破坏</span></a><a data-v-d3b51b4c="" href="/cn/reader/4387/84110" class="chapter"><!----><span data-v-d3b51b4c="">第五话 大坦白大会，开演</span></a><a data-v-d3b51b4c="" href="/cn/reader/4387/84113" class="chapter"><!----><span data-v-d3b51b4c="">第六话 如此日常之下，boss浮出水面</span></a><!--]--><!----></div><div data-v-d3b51b4c="" class="chapter-toggle-row"><button data-v-d3b51b4c="" class="chapter-expand-button" type="button" aria-label="展开目录" title="展开目录"><svg data-v-d3b51b4c="" viewBox="0 0 24 24" aria-hidden="true"><path data-v-d3b51b4c="" d="m6 9 6 6 6-6"></path></svg></button></div></section>
+<div data-v-7bf879b4="" class="reader-text"><p class="ln-paragraph ln-paragraph--indent" style="text-indent:2em;">书名：不时轻声地以俄语遮羞的邻座艾莉同学10</p>
+<p class="ln-paragraph ln-paragraph--indent" style="text-indent:2em;">正文</p>
+<p><img src="https://api.lightnovel.fun/upload-files/images/250702/c8b5a0e841eb18062e02fa809f2b6350.png?m=UyNjz2QCW3lQQEC28TMg4Q&amp;t=1787622618" img-width="860" img-height="1221" style="max-width:100%;height:auto;"></p>
+</div>
+"""
 import asyncio
 import hashlib
 import html
@@ -5,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -17,12 +30,24 @@ import urllib3
 
 import zBarkCustom
 
-# 尝试导入 opencc，如未安装则提供基础回退
+# 尝试导入 opencc 或 zhconv，如未安装则打印警告信息并自动兼容多种配置
+cc_converter = None
 try:
     import opencc
-    cc_converter = opencc.OpenCC('t2s')
-except ImportError:
-    cc_converter = None
+    try:
+        cc_converter = opencc.OpenCC('t2s')
+    except Exception:
+        cc_converter = opencc.OpenCC('t2s.json')
+except Exception:
+    try:
+        import zhconv
+        cc_converter = "zhconv"
+    except Exception:
+        cc_converter = None
+
+if cc_converter is None:
+    print("[!] 警告: 当前环境未安装 opencc 或 zhconv 库，繁转简功能将无法生效！")
+    print("    请在终端运行: pip install opencc-python-reimplemented 或 pip install zhconv")
 
 import zPerseusLogger
 from zConfig import get_config
@@ -68,11 +93,20 @@ def get_request_session():
     return session
 
 def convert_t2s(text: str, enabled: bool = True) -> str:
-    """繁体转简体函数"""
+    """繁体转简体函数，支持 OpenCC ('t2s'/'t2s.json') 与 zhconv 兼容回退"""
     if not text or not enabled:
         return text
-    if cc_converter:
-        return cc_converter.convert(text)
+    if cc_converter == "zhconv":
+        try:
+            import zhconv
+            return zhconv.convert(text, 'zh-cn')
+        except Exception:
+            return text
+    elif cc_converter:
+        try:
+            return cc_converter.convert(text)
+        except Exception:
+            return text
     return text
 
 def sanitize_filename(name: str) -> str:
@@ -114,10 +148,7 @@ def get_chapter_cache_path(book_title: str, vol_name: str, ch_title: str) -> str
     return os.path.join(dir_path, f"{safe_ch}.json")
 
 def get_image_save_dir(book_title: str, vol_name: str = None) -> str:
-    """获取图片的保存目录: 
-    如果不指定 vol_name，存一级目录: lkcache/书名/images_mapped
-    如果指定 vol_name，存分卷目录: lkcache/书名/分卷名/images_mapped
-    """
+    """获取图片的保存目录"""
     if vol_name:
         dir_path = os.path.join(get_chapter_dir(book_title, vol_name), "images_mapped")
     else:
@@ -189,7 +220,6 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
                     timeout=20,
                     verify=False,
                 )
-                # 必须大于 100 字节，防止保存几字节的空响应或报错文本
                 if resp.status_code == 200 and len(resp.content) > 100:
                     header = resp.content[:10]
                     ext = None
@@ -202,13 +232,12 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
                     elif header.startswith(b'RIFF') and header[8:12] == b'WEBP':
                         ext = ".webp"
 
-                    # 只有确认是合法图片格式数据才返回
                     if ext:
                         return resp.content, ext
                     else:
-                        print(f"    [!] 响应内容不是有效图片格式 (魔数校验失败)，重试 ({attempt + 1}/{retries})...")
+                        print(f"    [!] 响应内容不是有效图片格式，重试 ({attempt + 1}/{retries})...")
                 else:
-                    print(f"    [!] 状态码错误或数据过于微小 ({resp.status_code})，重试 ({attempt + 1}/{retries})...")
+                    print(f"    [!] 状态码错误或数据微小 ({resp.status_code})，重试 ({attempt + 1}/{retries})...")
             except Exception as e:
                 if attempt == retries - 1 and mode == modes[-1]:
                     print(f"  [!] 图片下载失败 {url}: {e}")
@@ -216,7 +245,7 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
     return None, None
 
 async def safe_goto(page, url: str, retries: int = 3):
-    """安全的页面加载函数，防止网络重置 (Connection Reset)"""
+    """安全的页面加载函数，支持页面连带等待逻辑"""
     for attempt in range(retries):
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -240,13 +269,12 @@ async def crawl_lightnovel_to_epub(
     """轻之国度小说爬取并合成 EPUB 主模块函数"""
     headers = {"User-Agent": USER_AGENT, "Referer": DOMAIN}
 
-    # 逻辑联动：若开启仅补齐图片，强制自动开启 pure_cache_only
     if only_redownload_images:
         use_cache_only = True
         print("[!] 检测到仅补齐图片模式 (only_redownload_images=True)，已自动强行切换 use_cache_only=True")
 
     async with async_playwright() as p:
-        # 1. 登录模式（没有输入 ID）
+        # 1. 登录模式
         if not book_id:
             print("[+] 未指定 book_id，进入登录模式...")
             browser = await p.chromium.launch(
@@ -319,25 +347,92 @@ async def crawl_lightnovel_to_epub(
             print(f"[+] 正在请求主页: {base_url}")
             await safe_goto(page, base_url)
 
-            # 获取主书名
+            # 滚动页面以触发 SPA / 懒加载渲染
+            for _ in range(3):
+                await page.evaluate("window.scrollBy(0, 800)")
+                await page.wait_for_timeout(500)
+
+            # 多层级提取书名（含 meta 标签与多种 CSS 选择器）
             try:
-                raw_title = await page.inner_text(".book-detail-title", timeout=5000)
-                book_title = convert_t2s(raw_title.strip(), to_simplified)
+                meta_title = await page.get_attribute("meta[property='og:title']", "content", timeout=2000)
+                if meta_title:
+                    book_title = convert_t2s(meta_title.strip(), to_simplified)
             except Exception:
                 pass
 
-            # 获取作者
+            if book_title == f"Book_{book_id}":
+                title_selectors = [
+                    ".detail-info h1", ".book-detail-title", ".book-title", ".book-name", 
+                    ".book-info-title", ".book-info h1", ".book-detail h1", "h1.title", "h1"
+                ]
+                for sel in title_selectors:
+                    try:
+                        t_text = await page.inner_text(sel, timeout=1500)
+                        if t_text and t_text.strip():
+                            book_title = convert_t2s(t_text.strip(), to_simplified)
+                            break
+                    except Exception:
+                        continue
+
+            # 多层级提取作者
             try:
-                raw_author = await page.inner_text(".book-detail-author", timeout=3000)
-                author = convert_t2s(raw_author.strip(), to_simplified)
+                meta_author = await page.get_attribute("meta[property='og:novel:author']", "content", timeout=2000)
+                if meta_author:
+                    author = convert_t2s(meta_author.strip(), to_simplified)
             except Exception:
                 pass
 
-            # 获取封面 URL
+            if author == "未知":
+                # 兼容新版 .detail-info-line 中的作者字段
+                try:
+                    author_spans = await page.query_selector_all(".detail-info-line span")
+                    for span in author_spans:
+                        s_text = await span.inner_text()
+                        if "作者" in s_text:
+                            strong_el = await span.query_selector("strong")
+                            if strong_el:
+                                author_raw = await strong_el.inner_text()
+                                if author_raw and author_raw.strip():
+                                    author = convert_t2s(author_raw.strip(), to_simplified)
+                                    break
+                except Exception:
+                    pass
+
+            if author == "未知":
+                author_selectors = [
+                    ".detail-info-line strong", ".book-detail-author", ".book-author", ".book-info-author",
+                    ".author", "a[href*='author']", ".book-info .author", ".info-author"
+                ]
+                for sel in author_selectors:
+                    try:
+                        a_text = await page.inner_text(sel, timeout=1500)
+                        if a_text and a_text.strip():
+                            author = convert_t2s(a_text.strip(), to_simplified)
+                            break
+                    except Exception:
+                        continue
+
+            # 多层级提取封面
             try:
-                cover_url = await page.get_attribute(".book-cover img", "src", timeout=3000)
+                meta_cover = await page.get_attribute("meta[property='og:image']", "content", timeout=2000)
+                if meta_cover:
+                    cover_url = meta_cover
             except Exception:
                 pass
+
+            if not cover_url:
+                cover_selectors = [
+                    ".pc-book-cover-img", ".detail-cover img", ".book-cover img", ".cover-img img", 
+                    ".book-info img", ".cover img", "img[src*='cover']", "img[src*='upload']", "img.cover"
+                ]
+                for sel in cover_selectors:
+                    try:
+                        c_src = await page.get_attribute(sel, "src", timeout=1500)
+                        if c_src:
+                            cover_url = c_src
+                            break
+                    except Exception:
+                        continue
 
             # 保存 metadata.json
             save_book_metadata(
@@ -353,29 +448,122 @@ async def crawl_lightnovel_to_epub(
 
             print(f"[✓] 书名: {book_title} | 作者: {author}")
 
-            # 解析分卷和章节目录
-            vol_elements = await page.query_selector_all(".catalog-volume, .volume-item")
-            if not vol_elements:
-                vol_elements = [page]  # 如果没找到分卷元素，退化为全局提取
+            # 尝试点击展开目录按钮
+            try:
+                expand_btns = await page.query_selector_all(".chapter-expand-button, .expand-catalog, .volume-header, .catalog-expand, .show-all, .unfold-btn")
+                for btn in expand_btns:
+                    try:
+                        if await btn.is_visible():
+                            await btn.click()
+                            await page.wait_for_timeout(300)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
-            for v_idx, vol in enumerate(vol_elements):
-                try:
-                    raw_vol_title = await vol.inner_text(".volume-title", timeout=1000)
-                    vol_title = convert_t2s(raw_vol_title.strip(), to_simplified)
-                except Exception:
-                    vol_title = f"第{v_idx + 1}卷"
+            # 1. 优先适配新版卷 Tab（.volume-tabs .volume-tab）点击切换提取机制
+            vol_tabs = await page.query_selector_all(".volume-tabs .volume-tab, .volume-tab")
+            if vol_tabs:
+                for v_tab in vol_tabs:
+                    try:
+                        # 点击卷选项卡
+                        await v_tab.click()
+                        await page.wait_for_timeout(400)
+                    except Exception:
+                        pass
 
-                ch_links = await vol.query_selector_all("a[href*='/chapter/']")
+                    v_title_raw = await v_tab.get_attribute("title") or await v_tab.inner_text()
+                    vol_title = convert_t2s(v_title_raw.strip(), to_simplified) if v_title_raw else "正文卷"
+
+                    # 再次触发展开全卷目录
+                    try:
+                        exp_btn = await page.query_selector(".chapter-expand-button")
+                        if exp_btn and await exp_btn.is_visible():
+                            await exp_btn.click()
+                            await page.wait_for_timeout(300)
+                    except Exception:
+                        pass
+
+                    # 提取当前卷网格下的章节链接 (适配 /cn/reader/、/reader/、a.chapter 等)
+                    ch_links = await page.query_selector_all(".chapter-grid a, a.chapter, a[href*='/reader/'], a[href*='/chapter/']")
+                    chapters = []
+                    seen_urls = set()
+                    for c_link in ch_links:
+                        href = await c_link.get_attribute("href")
+                        if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
+                            continue
+                        full_url = urljoin(DOMAIN, href)
+                        if full_url in seen_urls:
+                            continue
+                        seen_urls.add(full_url)
+
+                        raw_c_title = await c_link.inner_text()
+                        c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
+                        chapters.append({"title": c_title, "url": full_url})
+
+                    if chapters:
+                        volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+
+            # 2. 旧版/传统 DOM 结构分卷解析兜底
+            if not volumes_data:
+                vol_elements = await page.query_selector_all(
+                    ".catalog-volume, .volume-item, .volume-box, .volume-wrap, .volume-list, .volume, .catalog-section, .catalog-group, [class*='volume']"
+                )
+
+                if vol_elements:
+                    for v_idx, vol in enumerate(vol_elements):
+                        vol_title = ""
+                        vol_title_selectors = [
+                            ".volume-title", ".volume-name", ".catalog-volume-title", ".volume-header", "h3", "h4", ".title"
+                        ]
+                        for v_sel in vol_title_selectors:
+                            try:
+                                v_raw = await vol.inner_text(v_sel, timeout=800)
+                                if v_raw and v_raw.strip():
+                                    vol_title = convert_t2s(v_raw.strip(), to_simplified)
+                                    break
+                            except Exception:
+                                continue
+
+                        if not vol_title:
+                            vol_title = f"第{v_idx + 1}卷"
+
+                        ch_links = await vol.query_selector_all("a[href*='/reader/'], a[href*='/chapter/'], a[href*='/detail/'], a.chapter")
+                        chapters = []
+                        for c_link in ch_links:
+                            href = await c_link.get_attribute("href")
+                            if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
+                                continue
+                            raw_c_title = await c_link.inner_text()
+                            c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
+                            full_url = urljoin(DOMAIN, href)
+                            chapters.append({"title": c_title, "url": full_url})
+
+                        if chapters:
+                            volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+
+            # 3. 强效兜底逻辑：若仍未查找到分卷，全页抽取所有阅读链接归入默认卷
+            if not volumes_data:
+                print("  [!] 未检测到分卷容器，启用全页章节抽取兜底策略...")
+                all_ch_links = await page.query_selector_all(
+                    "a[href*='/reader/'], a[href*='/chapter/'], a[href*='/detail/'], a.chapter"
+                )
                 chapters = []
-                for c_link in ch_links:
+                seen_urls = set()
+                for c_link in all_ch_links:
                     href = await c_link.get_attribute("href")
-                    raw_c_title = await c_link.inner_text()
-                    c_title = convert_t2s(raw_c_title.strip(), to_simplified)
+                    if not href:
+                        continue
                     full_url = urljoin(DOMAIN, href)
+                    if full_url in seen_urls:
+                        continue
+                    seen_urls.add(full_url)
+                    raw_c_title = await c_link.inner_text()
+                    c_title = convert_t2s(raw_c_title.strip(), to_simplified) or f"章节 {len(chapters)+1}"
                     chapters.append({"title": c_title, "url": full_url})
 
                 if chapters:
-                    volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+                    volumes_data.append({"vol_title": "正文卷", "chapters": chapters})
 
         else:
             # 本地纯缓存读取模式
@@ -416,9 +604,9 @@ async def crawl_lightnovel_to_epub(
                     for fname in sorted(os.listdir(vol_dpath)):
                         if fname.endswith(".json"):
                             ch_title = fname[:-5]
-                            vol_ch_list.append({"title": ch_title, "url": ""})
+                            vol_ch_list.append({"title": convert_t2s(ch_title, to_simplified), "url": ""})
                     if vol_ch_list:
-                        volumes_data.append({"vol_title": vol_dname, "chapters": vol_ch_list})
+                        volumes_data.append({"vol_title": convert_t2s(vol_dname, to_simplified), "chapters": vol_ch_list})
 
         downloaded_epubs = []
 
@@ -429,7 +617,6 @@ async def crawl_lightnovel_to_epub(
             root_img_dir = get_image_save_dir(book_title)
             cover_hash = get_url_hash(cover_url)
 
-            # 先检查 images_mapped 目录下已保存的封面
             existing_cover_file = None
             for ext in [".jpg", ".png", ".gif", ".webp"]:
                 test_cover_p = os.path.join(root_img_dir, f"cover_{cover_hash}{ext}")
@@ -473,7 +660,7 @@ async def crawl_lightnovel_to_epub(
             vol_image_map = {}  # original_url_or_hash -> (local_filename, full_path)
 
             for c_idx, ch in enumerate(chapters):
-                ch_title = ch["title"]
+                ch_title = convert_t2s(ch["title"], to_simplified)
                 ch_url = ch["url"]
 
                 cached_data = load_chapter_cache(book_title, vol_title, ch_title)
@@ -482,10 +669,9 @@ async def crawl_lightnovel_to_epub(
 
                 if cached_data and "content" in cached_data:
                     print(f"  [✓] 读入章节本地缓存 [{c_idx+1}/{len(chapters)}]: {ch_title}")
-                    ch_html_content = cached_data["content"]
+                    ch_html_content = convert_t2s(cached_data["content"], to_simplified)
                     images_info = cached_data.get("images", [])
 
-                    # 如果 images 列表为空，从 HTML 中再匹配补齐一次 images_info
                     if not images_info:
                         found_srcs = re.findall(r'src=["\']([^"\']+)["\']', ch_html_content)
                         for src in found_srcs:
@@ -498,14 +684,23 @@ async def crawl_lightnovel_to_epub(
                     await safe_goto(page, ch_url)
 
                     try:
-                        read_more = await page.query_selector(".read-more, .expand-btn")
-                        if read_more:
+                        read_more = await page.query_selector(".read-more, .expand-btn, .show-more, .unfold-text")
+                        if read_more and await read_more.is_visible():
                             await read_more.click()
                             await page.wait_for_timeout(1000)
                     except Exception:
                         pass
 
-                    content_el = await page.query_selector(".chapter-content, #article-content, .read-content")
+                    content_selectors = [
+                        ".reader-text", ".chapter-content", "#article-content", ".read-content", 
+                        ".chapter-body", ".content", "#content", "[class*='reader-text']", "[class*='chapter-content']", "[class*='read-content']"
+                    ]
+                    content_el = None
+                    for c_sel in content_selectors:
+                        content_el = await page.query_selector(c_sel)
+                        if content_el:
+                            break
+
                     if content_el:
                         raw_html = await content_el.inner_html()
                         ch_html_content = convert_t2s(raw_html, to_simplified)
@@ -527,7 +722,6 @@ async def crawl_lightnovel_to_epub(
 
                 ch_img_dir = get_image_save_dir(book_title, vol_title)
 
-                # 提取正文中所有可能存在的原始图片 URL / Hash 列表
                 for img_item in images_info:
                     img_url = img_item["url"]
                     img_hash = img_item["hash"]
@@ -539,7 +733,6 @@ async def crawl_lightnovel_to_epub(
                             local_img_name = f"{img_hash}{ext}"
                             break
 
-                    # 图片不存在或文件校验损坏（如被写成了0字节/HTML报错页），进行补下
                     if not local_img_name:
                         print(f"    [+] 补齐/重新下载图片 ({img_hash}): {img_url}")
                         img_data, img_ext = download_image(img_url, headers, cookies_dict)
@@ -556,13 +749,10 @@ async def crawl_lightnovel_to_epub(
                     if local_img_name:
                         img_full_path = os.path.join(ch_img_dir, local_img_name)
                         if is_image_valid(img_full_path):
-                            # 使用字典绑定 hash，保证格式一致
                             vol_image_map[img_hash] = (local_img_name, img_full_path)
-
-# 精准将 HTML 中的图片 src 路径替换为标准相对路径 images/hash.ext
+                # 精准将 HTML 中的图片 src 路径替换为标准相对路径 images/hash.ext
                 processed_html = ch_html_content
                 for img_hash, (img_filename, _) in vol_image_map.items():
-                    # 匹配所有包含该 32位 Hash 的 src 链接并精准替换
                     processed_html = re.sub(
                         rf'src=["\'][^"\']*?{img_hash}[^"\']*?["\']',
                         f'src="images/{img_filename}"',
@@ -570,11 +760,11 @@ async def crawl_lightnovel_to_epub(
                     )
 
                 c_item = epub.EpubHtml(
-                    title=ch_title,
+                    title=convert_t2s(ch_title, to_simplified),
                     file_name=f"chap_{c_idx+1}.xhtml",
                     lang="zh",
                 )
-                c_item.content = f"<h2>{ch_title}</h2>\n<div>{processed_html}</div>"
+                c_item.content = f"<h2>{convert_t2s(ch_title, to_simplified)}</h2>\n<div>{convert_t2s(processed_html, to_simplified)}</div>"
                 book.add_item(c_item)
                 epub_chapters.append(c_item)
 
@@ -597,18 +787,18 @@ async def crawl_lightnovel_to_epub(
                     elif "webp" in ext:
                         media_type = "image/webp"
 
-                    # 规范 uid 避免非法字符导致 EPUB 解析器崩溃
                     safe_uid = re.sub(r'[^a-zA-Z0-9_\-]', '_', f"img_{img_hash}")
 
                     img_item = epub.EpubItem(
                         uid=safe_uid,
-                        file_name=f"images/{img_filename}",  # 保证与 HTML 内 src="images/xxx" 绝对对应
+                        file_name=f"images/{img_filename}",
                         media_type=media_type,
                         content=i_data,
                     )
                     book.add_item(img_item)
                 except Exception as e:
                     print(f"  [!] 写入图片到 EPUB 失败 ({img_filename}): {e}")
+
             # 封装生成目录与 Spine
             book.toc = tuple(epub_chapters)
             book.add_item(epub.EpubNcx())
@@ -632,7 +822,7 @@ async def crawl_lightnovel_to_epub(
         return downloaded_epubs
 
 if __name__ == "__main__":
-    bid = sys.argv[1] if len(sys.argv) > 1 else "10312"
+    bid = sys.argv[1] if len(sys.argv) > 1 else "2143"
     asyncio.run(
         crawl_lightnovel_to_epub(
             book_id=bid,
