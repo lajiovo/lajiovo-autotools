@@ -245,18 +245,20 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
     return None, None
 
 async def safe_goto(page, url: str, retries: int = 3):
-    """安全的页面加载函数，支持页面连带等待逻辑"""
+    """安全的页面加载函数，支持页面连带等待逻辑与防挂起机制"""
     for attempt in range(retries):
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(3000)
+            # 降低单次加载超时时间为 25 秒，防止长时间死锁卡住
+            await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            await page.wait_for_timeout(1000)
             return True
         except Exception as e:
             print(f"  [!] 加载页面失败 ({attempt + 1}/{retries}): {url} -> {e}")
             if attempt < retries - 1:
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
             else:
-                raise e
+                print(f"  [!] 页面加载多次超时，强制继续解析: {url}")
+                return False
 
 async def crawl_lightnovel_to_epub(
     book_id: str = None,
@@ -448,61 +450,68 @@ async def crawl_lightnovel_to_epub(
 
             print(f"[✓] 书名: {book_title} | 作者: {author}")
 
-            # 尝试点击展开目录按钮
-            try:
-                expand_btns = await page.query_selector_all(".chapter-expand-button, .expand-catalog, .volume-header, .catalog-expand, .show-all, .unfold-btn")
-                for btn in expand_btns:
-                    try:
-                        if await btn.is_visible():
-                            await btn.click()
-                            await page.wait_for_timeout(300)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
             # 1. 优先适配新版卷 Tab（.volume-tabs .volume-tab）点击切换提取机制
-            vol_tabs = await page.query_selector_all(".volume-tabs .volume-tab, .volume-tab")
-            if vol_tabs:
-                for v_tab in vol_tabs:
+            tab_locator = page.locator(".volume-tabs .volume-tab, .volume-tab")
+            tab_count = await tab_locator.count()
+
+            if tab_count > 0:
+                print(f"[+] 检测到 {tab_count} 个分卷选项卡，开始按序精准提取...")
+                for i in range(tab_count):
                     try:
-                        # 点击卷选项卡
-                        await v_tab.click()
-                        await page.wait_for_timeout(400)
-                    except Exception:
-                        pass
+                        current_tab = tab_locator.nth(i)
 
-                    v_title_raw = await v_tab.get_attribute("title") or await v_tab.inner_text()
-                    vol_title = convert_t2s(v_title_raw.strip(), to_simplified) if v_title_raw else "正文卷"
+                        # 获取卷标题
+                        v_title_raw = await current_tab.get_attribute("title") or await current_tab.inner_text()
+                        vol_title = convert_t2s(v_title_raw.strip(), to_simplified) if v_title_raw else f"第{i+1}卷"
 
-                    # 再次触发展开全卷目录
-                    try:
-                        exp_btn = await page.query_selector(".chapter-expand-button")
-                        if exp_btn and await exp_btn.is_visible():
-                            await exp_btn.click()
-                            await page.wait_for_timeout(300)
-                    except Exception:
-                        pass
+                        # 平滑滚动并点击当前卷 Tab，防止 DOM 重新渲染导致页面乱飞
+                        await current_tab.scroll_into_view_if_needed(timeout=2000)
+                        await current_tab.click(timeout=3000, force=True)
 
-                    # 提取当前卷网格下的章节链接 (适配 /cn/reader/、/reader/、a.chapter 等)
-                    ch_links = await page.query_selector_all(".chapter-grid a, a.chapter, a[href*='/reader/'], a[href*='/chapter/']")
-                    chapters = []
-                    seen_urls = set()
-                    for c_link in ch_links:
-                        href = await c_link.get_attribute("href")
-                        if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
-                            continue
-                        full_url = urljoin(DOMAIN, href)
-                        if full_url in seen_urls:
-                            continue
-                        seen_urls.add(full_url)
+                        # 增加等待时间，确保 AJAX/动态数据与 UI 渲染完毕后再进行后续提取
+                        await page.wait_for_timeout(1500)
+                        try:
+                            await page.wait_for_selector(
+                                ".chapter-grid a, .chapter-grid .chapter, a[href*='/reader/']", 
+                                timeout=4000
+                            )
+                        except Exception:
+                            pass
 
-                        raw_c_title = await c_link.inner_text()
-                        c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
-                        chapters.append({"title": c_title, "url": full_url})
+                        # 尝试点击展开目录按钮（如存在）
+                        try:
+                            exp_btn = page.locator(".chapter-expand-button, .expand-catalog, .unfold-btn").first
+                            if await exp_btn.is_visible(timeout=1000):
+                                await exp_btn.click(timeout=2000, force=True)
+                                await page.wait_for_timeout(800)
+                        except Exception:
+                            pass
 
-                    if chapters:
-                        volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+                        # 优先从当前卷网格容器 .chapter-grid 中提取章节链接
+                        ch_links = await page.query_selector_all(".chapter-grid a, .chapter-grid .chapter")
+                        if not ch_links:
+                            ch_links = await page.query_selector_all("a[href*='/reader/'], a[href*='/chapter/']")
+
+                        chapters = []
+                        seen_urls = set()
+                        for c_link in ch_links:
+                            href = await c_link.get_attribute("href")
+                            if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
+                                continue
+                            full_url = urljoin(DOMAIN, href)
+                            if full_url in seen_urls:
+                                continue
+                            seen_urls.add(full_url)
+
+                            raw_c_title = await c_link.inner_text()
+                            c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
+                            chapters.append({"title": c_title, "url": full_url})
+
+                        if chapters:
+                            volumes_data.append({"vol_title": vol_title, "chapters": chapters})
+                            print(f"  [✓] 成功解析分卷【{vol_title}】，获取 {len(chapters)} 章")
+                    except Exception as e:
+                        print(f"  [!] 提取第 {i+1} 卷数据失败，跳过该卷: {e}")
 
             # 2. 旧版/传统 DOM 结构分卷解析兜底
             if not volumes_data:
@@ -686,8 +695,8 @@ async def crawl_lightnovel_to_epub(
                     try:
                         read_more = await page.query_selector(".read-more, .expand-btn, .show-more, .unfold-text")
                         if read_more and await read_more.is_visible():
-                            await read_more.click()
-                            await page.wait_for_timeout(1000)
+                            await read_more.click(timeout=2000, force=True)
+                            await page.wait_for_timeout(600)
                     except Exception:
                         pass
 
