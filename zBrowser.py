@@ -6,6 +6,10 @@ async def run():
     current_dir = Path(__file__).parent.resolve()
     user_data_dir = current_dir / "cache"
     
+    # 确保下载目录为绝对路径并自动创建，防止因目录不存在导致下载失败
+    download_dir = current_dir / "browser_downloads"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    
     # 针对 1920x1080 (125% 缩放) 的精准计算：
     # 0.8 倍窗口尺寸 = 1536 x 864
     win_w, win_h = 1536, 864
@@ -42,7 +46,10 @@ async def run():
             },
             timezone_id="Asia/Tokyo",
             geolocation={"latitude": 35.6762, "longitude": 139.6503},
-            permissions=["geolocation"]
+            # 添加了剪切板读取和写入权限，开启剪切板穿透
+            permissions=["geolocation", "clipboard-read", "clipboard-write"],
+            accept_downloads=True,  # 显式允许文件下载
+            downloads_path=str(download_dir)
         )
 
         # 注入 JavaScript 防检测脚本
@@ -56,7 +63,7 @@ async def run():
 
         try:
             await page.goto("https://gemini.google.com/", wait_until="domcontentloaded", timeout=60000)
-            print(f"已成功打开 Gemini，已针对 125% 缩放校准视口，输入框已恢复显示。")
+            print(f"已成功打开 Gemini，已针对 125% 缩放校准视口，输入框已恢复显示。剪切板穿透权限已生效。")
         except Exception as e:
             print(f"打开页面失败，请检查代理节点连通性: {e}")
 

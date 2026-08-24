@@ -878,6 +878,7 @@ if __name__ == "__main__":
     asyncio.run(
         crawl_lightnovel_to_epub(
             book_id=bid,
+            output_dir="./Novels/",
             headless=False,
             only_redownload_images=False,
             to_simplified=True,     # 默认开启繁转简

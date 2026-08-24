@@ -7,6 +7,8 @@ logs/
 __pycache__/
 QBot2/
 botdata/
+Novels/
+browser_downloads/
 
 # 2. 忽略特定扩展名的文件
 *.log
