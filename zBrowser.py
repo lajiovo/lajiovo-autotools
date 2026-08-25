@@ -34,7 +34,7 @@ async def run():
             ignore_default_args=["--enable-automation"],
             viewport={"width": view_w, "height": view_h},  # 显式锁死视口，不再使用 None 让系统滥算
             proxy={
-                "server": "socks5://192.168.10.8:1082"
+                "server": "socks5://192.168.10.10:1082"
             },
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             device_scale_factor=1,
