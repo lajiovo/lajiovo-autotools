@@ -81,8 +81,9 @@ class MyClient(botpy.Client):
         content: str,
         msg_id: str = "",
         ref_msg_id: str = None,
+        msg_seq: int = None,
     ):
-        """发送纯文本消息 (msg_type=0)，支持引用回复"""
+        """发送纯文本消息 (msg_type=0)，支持引用回复与消息序号"""
         kwargs = {
             "group_openid": group_openid,
             "msg_type": 0,
@@ -91,6 +92,8 @@ class MyClient(botpy.Client):
         }
         if ref_msg_id:
             kwargs["message_reference"] = {"message_id": ref_msg_id}
+        if msg_seq is not None:
+            kwargs["msg_seq"] = msg_seq
 
         await self.api.post_group_message(**kwargs)
         logging.info(f"💬 [文本/引用消息发送成功] OpenID: {group_openid}")
@@ -101,8 +104,9 @@ class MyClient(botpy.Client):
         content: str,
         msg_id: str = "",
         ref_msg_id: str = None,
+        msg_seq: int = None,
     ):
-        """发送单聊纯文本消息 (msg_type=0)，支持引用回复"""
+        """发送单聊纯文本消息 (msg_type=0)，支持引用回复与消息序号"""
         payload = {
             "msg_type": 0,
             "content": content,
@@ -111,6 +115,8 @@ class MyClient(botpy.Client):
             payload["msg_id"] = msg_id
         if ref_msg_id:
             payload["message_reference"] = {"message_id": ref_msg_id}
+        if msg_seq is not None:
+            payload["msg_seq"] = msg_seq
 
         await self._raw_post(
             "/v2/users/{user_openid}/messages",
@@ -126,8 +132,9 @@ class MyClient(botpy.Client):
         content: str,
         msg_id: str = "",
         keyboard: dict = None,
+        msg_seq: int = None,
     ):
-        """通过原生的 Markdown 文本内容发送群消息 (msg_type=2)，支持拼接内嵌键盘"""
+        """通过原生的 Markdown 文本内容发送群消息 (msg_type=2)，支持拼接内嵌键盘与消息序号"""
         markdown = MarkdownPayload(content=content)
         kwargs = {
             "group_openid": group_openid,
@@ -137,6 +144,8 @@ class MyClient(botpy.Client):
         }
         if keyboard:
             kwargs["keyboard"] = keyboard
+        if msg_seq is not None:
+            kwargs["msg_seq"] = msg_seq
 
         await self.api.post_group_message(**kwargs)
         logging.info(f"📢 [Markdown 发送成功] OpenID: {group_openid}")
@@ -147,8 +156,9 @@ class MyClient(botpy.Client):
         content: str,
         msg_id: str = "",
         keyboard: dict = None,
+        msg_seq: int = None,
     ):
-        """通过原生的 Markdown 文本内容发送单聊消息 (msg_type=2)，支持拼接内嵌键盘"""
+        """通过原生的 Markdown 文本内容发送单聊消息 (msg_type=2)，支持拼接内嵌键盘与消息序号"""
         payload = {
             "msg_type": 2,
             "markdown": {"content": content},
@@ -157,6 +167,8 @@ class MyClient(botpy.Client):
             payload["msg_id"] = msg_id
         if keyboard:
             payload["keyboard"] = keyboard
+        if msg_seq is not None:
+            payload["msg_seq"] = msg_seq
 
         await self._raw_post(
             "/v2/users/{user_openid}/messages",
@@ -172,6 +184,7 @@ class MyClient(botpy.Client):
         params_dict: dict,
         msg_id: str = "",
         keyboard: dict = None,
+        msg_seq: int = None,
     ):
         """通过自定义模板 ID 和参数列表发送 Markdown 消息"""
         params = [
@@ -189,6 +202,8 @@ class MyClient(botpy.Client):
         }
         if keyboard:
             kwargs["keyboard"] = keyboard
+        if msg_seq is not None:
+            kwargs["msg_seq"] = msg_seq
 
         await self.api.post_group_message(**kwargs)
         logging.info(f"📢 [Markdown 模板发送成功] OpenID: {group_openid}")
@@ -201,6 +216,7 @@ class MyClient(botpy.Client):
         content: str = "",
         msg_id: str = "",
         ref_msg_id: str = None,
+        msg_seq: int = None,
     ):
         """支持本地路径或网络 URL 发送群图片 (msg_type=7)"""
         logging.info(f"🖼️ 正在处理群图片发送: {file_path_or_url}")
@@ -241,6 +257,8 @@ class MyClient(botpy.Client):
             kwargs["content"] = content
         if ref_msg_id:
             kwargs["message_reference"] = {"message_id": ref_msg_id}
+        if msg_seq is not None:
+            kwargs["msg_seq"] = msg_seq
 
         await self.api.post_group_message(**kwargs)
         logging.info(f"🖼️ [富媒体图片发送成功] OpenID: {group_openid}")
@@ -252,6 +270,7 @@ class MyClient(botpy.Client):
         content: str = "",
         msg_id: str = "",
         ref_msg_id: str = None,
+        msg_seq: int = None,
     ):
         """支持本地路径或网络 URL 发送单聊图片 (msg_type=7)"""
         logging.info(f"🖼️ 正在处理单聊图片发送: {file_path_or_url}")
@@ -294,6 +313,8 @@ class MyClient(botpy.Client):
             payload["msg_id"] = msg_id
         if ref_msg_id:
             payload["message_reference"] = {"message_id": ref_msg_id}
+        if msg_seq is not None:
+            payload["msg_seq"] = msg_seq
 
         await self._raw_post(
             "/v2/users/{user_openid}/messages",
@@ -311,6 +332,7 @@ class MyClient(botpy.Client):
         pic_url: str,
         jump_url: str,
         msg_id: str = "",
+        msg_seq: int = None,
     ):
         """发送图文卡片消息 (msg_type=8)"""
         payload = {
@@ -327,6 +349,8 @@ class MyClient(botpy.Client):
         }
         if msg_id:
             payload["msg_id"] = msg_id
+        if msg_seq is not None:
+            payload["msg_seq"] = msg_seq
 
         await self._raw_post(
             "/v2/groups/{group_openid}/messages",
@@ -545,6 +569,7 @@ class MyClient(botpy.Client):
         """统一合并的回复发送函数，根据 res 数据字典中的 msg_type 参数分发逻辑"""
         msg_type = res.get("msg_type", 0)
         reply_content = res.get("content", "")
+        msg_seq = res.get("msg_seq", None)
 
         if msg_type == 2:
             if is_c2c:
@@ -553,6 +578,7 @@ class MyClient(botpy.Client):
                     content=reply_content,
                     msg_id=msg_id,
                     keyboard=res.get("keyboard"),
+                    msg_seq=msg_seq,
                 )
             else:
                 await self.send_group_markdown_by_content(
@@ -560,6 +586,7 @@ class MyClient(botpy.Client):
                     content=reply_content,
                     msg_id=msg_id,
                     keyboard=res.get("keyboard"),
+                    msg_seq=msg_seq,
                 )
         elif msg_type == 7:
             if is_c2c:
@@ -568,6 +595,7 @@ class MyClient(botpy.Client):
                     file_path_or_url=res.get("url") or res.get("file_path"),
                     content=reply_content,
                     msg_id=msg_id,
+                    msg_seq=msg_seq,
                 )
             else:
                 await self.send_group_image(
@@ -575,6 +603,7 @@ class MyClient(botpy.Client):
                     file_path_or_url=res.get("url") or res.get("file_path"),
                     content=reply_content,
                     msg_id=msg_id,
+                    msg_seq=msg_seq,
                 )
         elif msg_type == 8:
             card = res.get("card", {})
@@ -585,6 +614,7 @@ class MyClient(botpy.Client):
                     user_openid=target_id,
                     content=reply_content,
                     msg_id=msg_id,
+                    msg_seq=msg_seq,
                 )
             else:
                 await self.send_group_card(
@@ -594,17 +624,22 @@ class MyClient(botpy.Client):
                     pic_url=card_content.get("pic_url", ""),
                     jump_url=card_content.get("url", ""),
                     msg_id=msg_id,
+                    msg_seq=msg_seq,
                 )
         else:
             if is_c2c:
                 await self.send_c2c_text(
-                    user_openid=target_id, content=reply_content, msg_id=msg_id
+                    user_openid=target_id,
+                    content=reply_content,
+                    msg_id=msg_id,
+                    msg_seq=msg_seq,
                 )
             else:
                 await self.send_group_text(
                     group_openid=target_id,
                     content=reply_content,
                     msg_id=msg_id,
+                    msg_seq=msg_seq,
                 )
 
         # 自动记录机器人的回复 ( role 使用 assistant )
@@ -674,11 +709,11 @@ class MyClient(botpy.Client):
 
         # ------------------- #y / #yxxx 按需连接并转发至 YouzaiBot (15min自动断开) -------------------
         if cmd_text.startswith("y"):
-            yb_command = cmd_text[1:].strip()
+            yb_command = cmd_text[1:].lstrip("#").strip()
             if not yb_command:
                 yb_command = "帮助"
 
-            yz_res = await self.youzai_mgr.send_command(self,
+            yz_res = await self.youzai_mgr.send_command(
                 command_text=yb_command,
                 sender_openid=sender_openid,
                 raw_message=raw_message,

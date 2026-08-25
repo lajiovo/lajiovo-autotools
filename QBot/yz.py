@@ -360,7 +360,6 @@ class YunzaiWSClient:
 
     async def send_command(
         self,
-        client: object,
         command_text: str,
         sender_openid: str,
         raw_message: object,
@@ -369,7 +368,6 @@ class YunzaiWSClient:
     ) -> None:
         """触发指令时确保常驻连接，构建 OneBot 事件发送给 Yunzai，回复自动由常驻监听器实时接收处理
 
-        :param client: 主 Bot 客户端实例
         :param command_text: 触发指令文本
         :param sender_openid: 发送者的 OpenID
         :param raw_message: 原始消息对象
@@ -382,8 +380,8 @@ class YunzaiWSClient:
             # 1. 确保常驻 WebSocket 正常运行
             if not await self._ensure_connection():
                 err_res = {"msg_type": 0, "content": "⚠️ 无法连接至 YunzaiBot 服务，连接失败。"}
-                if hasattr(client, "send_reply"):
-                    await client.send_reply(err_res, sender_openid if is_c2c else group_id, raw_msg_id, is_c2c=is_c2c)
+                if hasattr(self.bot, "send_reply"):
+                    await self.bot.send_reply(err_res, sender_openid if is_c2c else group_id, raw_msg_id, is_c2c=is_c2c)
                 return
 
             fake_user_id = self.get_or_create_fake_user_id(sender_openid)
