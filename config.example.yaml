@@ -184,3 +184,7 @@ bot:
     
     # 替换后的掩码字符串
     mask_replacement: "D:\\***"
+
+    # 关于云崽
+    node : "C:\\Program Files\\nodejs\\node.exe"
+    yzdir : "D:\\???\\Perseus\\yunzai"

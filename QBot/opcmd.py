@@ -5,7 +5,7 @@ import time
 import urllib.parse
 import urllib.request
 from botpy.message import GroupMessage
-from config import BotDataManager, zConfig,_log
+from config import BotDataManager, zConfig
 
 # 尝试导入 psutil 获取系统资源，若未安装则自动降级处理
 try:
@@ -20,10 +20,16 @@ ALAS_ERROR_LOG_PATH = zConfig.get_config("bot.opcmd.alas_error_log_path")
 
 SENSITIVE_PATTERNS = zConfig.get_config("bot.opcmd.sensitive_patterns", default=[])
 MASK_REPLACEMENT = zConfig.get_config("bot.opcmd.mask_replacement", default=r"D:\***")
+
+NODEEXE = zConfig.get_config("bot.opcmd.node")
+YZDIR = zConfig.get_config("bot.opcmd.yzdir")
 BEGINVBS = zConfig.get_config("bot.opcmd.beginvbs")
 
 # 用于内存中缓存各群/用户当前的日志选择与文件读取位置 (状态记录)
 LOG_STATE_CACHE = {}
+
+# 存储 Yunzai 进程 PID
+YZ_PID = None
 
 
 class DataMgrAdapter:
@@ -360,6 +366,7 @@ async def handle_op_command(
             "📌 【机器人基础控制】\n"
             "• #op help - 查看所有 OP 指令\n"
             "• #op sys (或 status/cpu) - 查询服务器 CPU、内存等基础资源占用\n"
+            "• #op yz <start/kill> - 无窗口静默启动/关闭 Yunzai-Bot\n"
             "• #op stop - 暂停机器人功能 (维护模式，屏蔽消息回复)\n"
             "• #op start - 恢复机器人功能\n"
             "• #op restart - 重新无窗口启动 QBot (执行 sv bot/start)\n"
@@ -409,6 +416,80 @@ async def handle_op_command(
     # ------------------- #op sys 查询系统占用状态 -------------------
     elif sub_cmd in ["sys", "status", "sysinfo", "system", "cpu"]:
         return _get_system_status()
+
+    # ------------------- #op yz 控制 Yunzai 进程 -------------------
+    elif sub_cmd == "yz":
+        global YZ_PID ,NODEEXE,YZDIR
+        if len(args) < 2:
+            return "⚠️ 请提供 yz 参数，例如：`#op yz start` 或 `#op yz kill`"
+
+        yz_action = args[1].lower()
+        node_exe = NODEEXE
+        yz_dir = YZDIR
+
+        if yz_action == "start":
+            if not os.path.exists(node_exe):
+                return f"❌ 未找到 Node.exe 执行文件: `{node_exe}`"
+            if not os.path.exists(yz_dir):
+                return f"❌ 未找到 Yunzai 运行目录: `{yz_dir}`"
+
+            # 检查是否有正在运行的对应 Node 进程
+            running_pid = None
+            if HAS_PSUTIL:
+                for proc in psutil.process_iter(["pid", "name", "cwd"]):
+                    try:
+                        if proc.info["name"] and "node" in proc.info["name"].lower():
+                            p_cwd = proc.info.get("cwd")
+                            if p_cwd and os.path.normpath(p_cwd) == os.path.normpath(yz_dir):
+                                running_pid = proc.info["pid"]
+                                YZ_PID = running_pid
+                                break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+
+            if running_pid:
+                return f"⚠️ Yunzai-Bot 已在运行中 (PID: {running_pid})，无需重复启动。"
+
+            try:
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                proc = subprocess.Popen(
+                    [node_exe, "app"],
+                    cwd=yz_dir,
+                    creationflags=creationflags
+                )
+                YZ_PID = proc.pid
+                return f"🚀 已成功在后台无窗口静默启动 Yunzai-Bot！(PID: {YZ_PID})"
+            except Exception as e:
+                return f"❌ 启动 Yunzai-Bot 失败: {e}"
+
+        elif yz_action == "kill":
+            killed_count = 0
+            if HAS_PSUTIL:
+                for proc in psutil.process_iter(["pid", "name", "cwd"]):
+                    try:
+                        if proc.info["name"] and "node" in proc.info["name"].lower():
+                            p_cwd = proc.info.get("cwd")
+                            if p_cwd and os.path.normpath(p_cwd) == os.path.normpath(yz_dir):
+                                proc.kill()
+                                killed_count += 1
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+
+            # 备用 PID 终止方案
+            if YZ_PID and killed_count == 0:
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(YZ_PID)], capture_output=True)
+                    killed_count += 1
+                except Exception:
+                    pass
+
+            YZ_PID = None
+            if killed_count > 0:
+                return f"🛑 已成功终止 Yunzai-Bot 进程！(共清理 {killed_count} 个相关进程)"
+            else:
+                return "ℹ️ 当前未检测到正在运行的 Yunzai-Bot 进程。"
+
+        return "⚠️ 未知的 yz 子指令，可选：`start`, `kill`"
 
     # ------------------- #op panel 指令面板交互接口 -------------------
     elif sub_cmd == "panel":
