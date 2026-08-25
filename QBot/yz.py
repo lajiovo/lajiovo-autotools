@@ -209,7 +209,7 @@ class YouzaiWSClient:
         return {"msg_type": 0, "content": "⚠️ 未能及时收到 YouzaiBot 的有效回复。"}
 
     async def _handle_action_request(self, ws, req: dict, self_id):
-        """自动应答 Yunzai 探查 API"""
+        """自动应答 Yunzai 探查与发送 API"""
         action = req.get("action", "")
         echo = req.get("echo", "")
 
@@ -232,6 +232,14 @@ class YouzaiWSClient:
                 if action == "get_group_member_list"
                 else {"group_id": 97361482, "user_id": self_id, "nickname": "QQBot", "card": "", "role": "member"}
             )
+        elif action in [
+            "send_msg",
+            "send_group_msg",
+            "send_private_msg",
+            "send_group_forward_msg",
+            "send_forward_msg",
+        ]:
+            res_data = {"message_id": int(time.time() * 1000) % 1000000}
         elif "list" in action:
             res_data = []
 
@@ -247,8 +255,19 @@ class YouzaiWSClient:
     # 3. 响应解析与图片缓存 (规范化格式输出)
     # =========================================================================
     def _parse_onebot_message(self, params: dict):
-        """解析 OneBot API 消息内容，统一返回带有 msg_type 的消息字典"""
-        message_data = params.get("message") or params.get("messages") or params.get("nodes")
+        """解析 OneBot API 消息内容，支持普通消息、图片以及合并转发节点(nodes/forward)"""
+        if not isinstance(params, dict):
+            if isinstance(params, str):
+                return {"msg_type": 0, "content": params}
+            return None
+
+        # 兼顾 message、messages、nodes 以及 content 节点字段
+        message_data = (
+            params.get("message")
+            or params.get("messages")
+            or params.get("nodes")
+            or params.get("content")
+        )
         if not message_data:
             return None
 
@@ -260,11 +279,25 @@ class YouzaiWSClient:
             image_res = None
 
             for segment in message_data:
+                if isinstance(segment, str):
+                    text_pieces.append(segment)
+                    continue
+
                 if not isinstance(segment, dict):
                     continue
 
+                # 兼容格式如 [{"message": "—— TRSS Yunzai v3.1.3 ——..."}]
+                if "message" in segment and segment["message"]:
+                    sub_res = self._parse_onebot_message(segment)
+                    if isinstance(sub_res, dict):
+                        if sub_res.get("msg_type") == 7 and not image_res:
+                            image_res = sub_res
+                        elif sub_res.get("content"):
+                            text_pieces.append(sub_res["content"])
+                    continue
+
                 seg_type = segment.get("type")
-                seg_data = segment.get("data", {})
+                seg_data = segment.get("data", {}) if isinstance(segment.get("data"), dict) else {}
 
                 if seg_type == "text":
                     text_pieces.append(seg_data.get("text", ""))
@@ -280,7 +313,8 @@ class YouzaiWSClient:
                                 "content": "".join(text_pieces),
                             }
 
-                elif seg_type in ["node", "message"]:
+                elif seg_type in ["node", "message"] or "content" in seg_data or "message" in seg_data:
+                    # 递归解析合并转发 (forward) / node 嵌套节点
                     sub_res = self._parse_onebot_message(seg_data)
                     if isinstance(sub_res, dict):
                         if sub_res.get("msg_type") == 7 and not image_res:
@@ -289,9 +323,12 @@ class YouzaiWSClient:
                             text_pieces.append(sub_res["content"])
 
             if image_res:
+                if text_pieces and not image_res.get("content"):
+                    image_res["content"] = "\n".join(text_pieces)
                 return image_res
+
             if text_pieces:
-                return {"msg_type": 0, "content": "\n".join(text_pieces)}
+                return {"msg_type": 0, "content": "\n\n".join(text_pieces)}
 
         return None
 
