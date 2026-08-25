@@ -9,13 +9,20 @@ import time
 import aiohttp
 
 
-class YouzaiWSClient:
-    """YouzaiBot (Yunzai / GSUIDCore) 按需 WebSocket 连接与内容处理器"""
+class YunzaiWSClient:
+    """YunzaiBot (Yunzai / GSUIDCore) 按需 WebSocket 连接与内容处理器"""
 
     def __init__(self, bot_client):
         self.bot = bot_client
         self.ws_url = "ws://localhost:2536/OneBotv11"
         self.default_self_id = 985211
+
+        # WebSocket 连接与 15 分钟闲置断开控制器
+        self.session = None
+        self.ws = None
+        self.last_active_time = 0
+        self.idle_timer_task = None
+        self.lock = asyncio.Lock()
 
     # =========================================================================
     # 1. 假 ID 生成与持久化
@@ -70,6 +77,64 @@ class YouzaiWSClient:
         return val
 
     # =========================================================================
+    # 1.5. 长连接保活与 15 分钟闲置超时断开逻辑
+    # =========================================================================
+    async def _ensure_connection(self) -> bool:
+        """首次激活或断开后建立 WebSocket 连接"""
+        if self.ws and not self.ws.closed:
+            return True
+
+        logging.info(f"🔌 [首次激活/重新连接] 正在建立 YunzaiBot WebSocket ({self.ws_url})...")
+        try:
+            if not self.session or self.session.closed:
+                self.session = aiohttp.ClientSession()
+
+            self.ws = await self.session.ws_connect(self.ws_url, timeout=5.0)
+            logging.info("✅ YunzaiBot WebSocket 连接成功建立！")
+
+            self_id = self._get_self_id()
+            await self._send_meta_events(self.ws, self_id)
+            return True
+        except Exception as e:
+            logging.error(f"❌ YunzaiBot 连接建立失败: {e}")
+            self.ws = None
+            return False
+
+    def _reset_idle_timer(self):
+        """刷新最后活动时间并重置 15 分钟闲置断开定时器"""
+        self.last_active_time = time.time()
+        if self.idle_timer_task and not self.idle_timer_task.done():
+            self.idle_timer_task.cancel()
+        self.idle_timer_task = asyncio.create_task(self._idle_timeout_checker())
+
+    async def _idle_timeout_checker(self):
+        """检查 15 分钟 (900s) 无消息超时并断开"""
+        try:
+            while True:
+                await asyncio.sleep(10)
+                if time.time() - self.last_active_time >= 900:  # 15 min
+                    logging.info("⏱️ [15分钟内无新 #y 消息] 正在断开 YunzaiBot WebSocket 连接...")
+                    await self.close_connection()
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    async def close_connection(self):
+        """主动断开 WebSocket 连接"""
+        if self.idle_timer_task and not self.idle_timer_task.done():
+            self.idle_timer_task.cancel()
+            self.idle_timer_task = None
+
+        if self.ws and not self.ws.closed:
+            await self.ws.close()
+            logging.info("🔌 YunzaiBot WebSocket 已主动关闭。")
+        self.ws = None
+
+        if self.session and not self.session.closed:
+            await self.session.close()
+            self.session = None
+
+    # =========================================================================
     # 2. 按需连接与消息发送 (统一返回带 msg_type 的标准字典)
     # =========================================================================
     async def send_command(
@@ -81,73 +146,75 @@ class YouzaiWSClient:
         is_c2c: bool = False,
     ) -> dict:
         """触发 #y 时建立连接，发送指令并等待响应，统一返回符合 main.py 发送规范的字典结构"""
-        fake_user_id = self.get_or_create_fake_user_id(sender_openid)
-        fake_group_id = self.get_or_create_fake_group_id(group_id) if not is_c2c else 0
-        self_id = self._get_self_id()
+        async with self.lock:
+            # 1. 尝试建立连接 (如未连接)
+            if not await self._ensure_connection():
+                return {"msg_type": 0, "content": "⚠️ 无法连接至 YunzaiBot 服务，连接失败。"}
 
-        now = int(time.time())
-        msg_id_num = int(hashlib.md5(f"{raw_message.id}".encode()).hexdigest()[:8], 16) % 1000000
+            # 2. 刷新 15 分钟无消息倒计时
+            self._reset_idle_timer()
 
-        # 构建 OneBot v11 消息事件体
-        if is_c2c:
-            onebot_event = {
-                "time": now,
-                "self_id": self_id,
-                "post_type": "message",
-                "message_type": "private",
-                "sub_type": "friend",
-                "message_id": msg_id_num,
-                "user_id": fake_user_id,
-                "message": command_text,
-                "raw_message": command_text,
-                "font": 0,
-                "sender": {
+            fake_user_id = self.get_or_create_fake_user_id(sender_openid)
+            fake_group_id = self.get_or_create_fake_group_id(group_id) if not is_c2c else 0
+            self_id = self._get_self_id()
+
+            now = int(time.time())
+            msg_id_num = int(hashlib.md5(f"{raw_message.id}".encode()).hexdigest()[:8], 16) % 1000000
+
+            # 构建 OneBot v11 消息事件体
+            if is_c2c:
+                onebot_event = {
+                    "time": now,
+                    "self_id": self_id,
+                    "post_type": "message",
+                    "message_type": "private",
+                    "sub_type": "friend",
+                    "message_id": msg_id_num,
                     "user_id": fake_user_id,
-                    "nickname": f"User_{str(fake_user_id)[-4:]}",
-                },
-            }
-        else:
-            onebot_event = {
-                "time": now,
-                "self_id": self_id,
-                "post_type": "message",
-                "message_type": "group",
-                "sub_type": "normal",
-                "message_id": msg_id_num,
-                "user_id": fake_user_id,
-                "message": command_text,
-                "raw_message": command_text,
-                "font": 0,
-                "sender": {
+                    "message": command_text,
+                    "raw_message": command_text,
+                    "font": 0,
+                    "sender": {
+                        "user_id": fake_user_id,
+                        "nickname": f"User_{str(fake_user_id)[-4:]}",
+                    },
+                }
+            else:
+                onebot_event = {
+                    "time": now,
+                    "self_id": self_id,
+                    "post_type": "message",
+                    "message_type": "group",
+                    "sub_type": "normal",
+                    "message_id": msg_id_num,
                     "user_id": fake_user_id,
-                    "nickname": f"User_{str(fake_user_id)[-4:]}",
-                    "card": "",
-                    "role": "member",
-                },
-                "group_id": fake_group_id,
-            }
+                    "message": command_text,
+                    "raw_message": command_text,
+                    "font": 0,
+                    "sender": {
+                        "user_id": fake_user_id,
+                        "nickname": f"User_{str(fake_user_id)[-4:]}",
+                        "card": "",
+                        "role": "member",
+                    },
+                    "group_id": fake_group_id,
+                }
 
-        logging.info(f"🔌 正在尝试连接 YouzaiBot WebSocket ({self.ws_url})...")
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(self.ws_url, timeout=5.0) as ws:
-                    logging.info("✅ 连接成功，发送握手与消息...")
-                    # 1. 模拟发送 Go-CQHTTP 元事件
-                    await self._send_meta_events(ws, self_id)
+            try:
+                # 发送 OneBot 消息
+                await self.ws.send_str(json.dumps(onebot_event))
 
-                    # 2. 发送 OneBot 消息
-                    await ws.send_str(json.dumps(onebot_event))
+                # 挂起等待响应（超时 15 秒）
+                response = await self._wait_for_response(self.ws, self_id, timeout=15.0)
+                return response
 
-                    # 3. 挂起等待响应（超时 15 秒）
-                    response = await self._wait_for_response(ws, self_id, timeout=15.0)
-                    return response
-
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logging.error(f"❌ YouzaiBot 连接失败或已断开: {e}")
-            return {"msg_type": 0, "content": "⚠️ 无法连接至 YouzaiBot 服务或连接已断开。"}
-        except Exception as e:
-            logging.error(f"❌ YouzaiBot 通信异常: {e}")
-            return {"msg_type": 0, "content": f"⚠️ 通信发生异常: {e}"}
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.error(f"❌ YunzaiBot 通信断开: {e}")
+                await self.close_connection()
+                return {"msg_type": 0, "content": "⚠️ YunzaiBot 连接已断开。"}
+            except Exception as e:
+                logging.error(f"❌ YunzaiBot 通信异常: {e}")
+                return {"msg_type": 0, "content": f"⚠️ 通信发生异常: {e}"}
 
     async def _send_meta_events(self, ws, self_id):
         """发送 Go-CQHTTP 上线元事件"""
@@ -203,10 +270,10 @@ class YouzaiWSClient:
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
-                logging.error(f"解析 YouzaiBot 响应异常: {e}")
+                logging.error(f"解析 YunzaiBot 响应异常: {e}")
                 break
 
-        return {"msg_type": 0, "content": "⚠️ 未能及时收到 YouzaiBot 的有效回复。"}
+        return {"msg_type": 0, "content": "⚠️ 未能及时收到 YunzaiBot 的有效回复。"}
 
     async def _handle_action_request(self, ws, req: dict, self_id):
         """自动应答 Yunzai 探查与发送 API"""

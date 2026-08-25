@@ -1,8 +1,8 @@
 import asyncio
 import base64
-import logging
 import os
 import time
+import logging
 
 import botpy
 from botpy.message import C2CMessage, GroupMessage
@@ -12,13 +12,14 @@ from config import (
     APP_ID,
     APP_SECRET,
     zConfig,
+    _log,
     BotDataManager,
     apply_sdk_patch,
 )
 from game import GameSystem
 from opcmd import handle_op_command
 from server import start_http_servers
-from yz import YouzaiWSClient
+from yz import YunzaiWSClient
 
 # ------------------- 文件配置区 -------------------
 TARGET_BOT_PREFIX = zConfig.get_config("bot.target_bot_prefix")
@@ -38,13 +39,8 @@ class MyClient(botpy.Client):
         self.bot_loop = None
         self.data_mgr = BotDataManager()
         self.game_sys = GameSystem(self.data_mgr)
-
-        # 消息去重与 API msg_seq 控制
-        self.processed_msg_ids = {}
-        self.msg_seq_map = {}
-
-        # 实例化 YouzaiWSClient
-        self.youzai_mgr = YouzaiWSClient(self)
+        # 实例化 YunzaiWSClient
+        self.youzai_mgr = YunzaiWSClient(self)
 
     async def on_ready(self):
         logging.info(f"robot 「{self.robot.name}」 已成功上线！")
@@ -53,56 +49,32 @@ class MyClient(botpy.Client):
         await self.notify_group_3("🟢 机器人已上线并准备就绪！")
 
     # =========================================================================
-    # 2. 消息去重与 Sequence 控制 (解决消息重复和 40054005 拦截)
-    # =========================================================================
-    def _is_duplicate_msg(self, msg_id: str) -> bool:
-        """检查 60 秒内是否收到过重复的 msg_id，防止公私聊/全量群消息双重回调触发"""
-        if not msg_id:
-            return False
-
-        now = time.time()
-        # 清理 60 秒以前的过期缓存
-        expired_keys = [k for k, v in self.processed_msg_ids.items() if now - v > 60]
-        for k in expired_keys:
-            del self.processed_msg_ids[k]
-
-        if msg_id in self.processed_msg_ids:
-            return True
-
-        self.processed_msg_ids[msg_id] = now
-        return False
-
-    def _get_next_msg_seq(self, msg_id: str) -> int:
-        """获取指定 msg_id 下自增的 msg_seq，避免 API msg_seq 冲突"""
-        if not msg_id:
-            return 1
-
-        seq = self.msg_seq_map.get(msg_id, 0) + 1
-        self.msg_seq_map[msg_id] = seq
-        return seq
-
-    # =========================================================================
-    # 3. 核心 HTTP 底层请求封装
+    # 2. 核心 HTTP 底层请求封装
     # =========================================================================
     async def _raw_post(self, route_path: str, payload: dict, **path_params):
-        """通用底层 HTTP POST 请求"""
+        """通用底层 HTTP POST 请求，绕过 SDK 强类型校验"""
         route = botpy.http.Route("POST", route_path, **path_params)
-        http_client = getattr(self.api, "_http", None) or getattr(self, "_http", None)
+        http_client = getattr(self.api, "_http", None) or getattr(
+            self, "_http", None
+        )
         if not http_client:
             raise AttributeError("未能获取到 SDK 底层 _http 请求对象")
         return await http_client.request(route, json=payload)
 
     async def _raw_put(self, route_path: str, payload: dict, **path_params):
-        """通用底层 HTTP PUT 请求"""
+        """通用底层 HTTP PUT 请求，绕过 SDK 强类型校验"""
         route = botpy.http.Route("PUT", route_path, **path_params)
-        http_client = getattr(self.api, "_http", None) or getattr(self, "_http", None)
+        http_client = getattr(self.api, "_http", None) or getattr(
+            self, "_http", None
+        )
         if not http_client:
             raise AttributeError("未能获取到 SDK 底层 _http 请求对象")
         return await http_client.request(route, json=payload)
 
     # =========================================================================
-    # 4. 各种类型消息发送接口
+    # 3. 各种类型消息发送接口 (Text, Markdown, Image, Card, Panel/Menu)
     # =========================================================================
+    # --- 文本/引用消息 ---
     async def send_group_text(
         self,
         group_openid: str,
@@ -110,15 +82,13 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         ref_msg_id: str = None,
     ):
-        """发送纯文本消息 (msg_type=0)"""
+        """发送纯文本消息 (msg_type=0)，支持引用回复"""
         kwargs = {
             "group_openid": group_openid,
             "msg_type": 0,
             "content": content,
             "msg_id": msg_id,
         }
-        if msg_id:
-            kwargs["msg_seq"] = self._get_next_msg_seq(msg_id)
         if ref_msg_id:
             kwargs["message_reference"] = {"message_id": ref_msg_id}
 
@@ -132,14 +102,13 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         ref_msg_id: str = None,
     ):
-        """发送单聊纯文本消息 (msg_type=0)"""
+        """发送单聊纯文本消息 (msg_type=0)，支持引用回复"""
         payload = {
             "msg_type": 0,
             "content": content,
         }
         if msg_id:
             payload["msg_id"] = msg_id
-            payload["msg_seq"] = self._get_next_msg_seq(msg_id)
         if ref_msg_id:
             payload["message_reference"] = {"message_id": ref_msg_id}
 
@@ -150,6 +119,7 @@ class MyClient(botpy.Client):
         )
         logging.info(f"💬 [单聊文本消息发送成功] UserOpenID: {user_openid}")
 
+    # --- Markdown & 内嵌键盘 ---
     async def send_group_markdown_by_content(
         self,
         group_openid: str,
@@ -157,7 +127,7 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         keyboard: dict = None,
     ):
-        """发送群 Markdown 消息 (msg_type=2)"""
+        """通过原生的 Markdown 文本内容发送群消息 (msg_type=2)，支持拼接内嵌键盘"""
         markdown = MarkdownPayload(content=content)
         kwargs = {
             "group_openid": group_openid,
@@ -165,8 +135,6 @@ class MyClient(botpy.Client):
             "markdown": markdown,
             "msg_id": msg_id,
         }
-        if msg_id:
-            kwargs["msg_seq"] = self._get_next_msg_seq(msg_id)
         if keyboard:
             kwargs["keyboard"] = keyboard
 
@@ -180,14 +148,13 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         keyboard: dict = None,
     ):
-        """发送单聊 Markdown 消息 (msg_type=2)"""
+        """通过原生的 Markdown 文本内容发送单聊消息 (msg_type=2)，支持拼接内嵌键盘"""
         payload = {
             "msg_type": 2,
             "markdown": {"content": content},
         }
         if msg_id:
             payload["msg_id"] = msg_id
-            payload["msg_seq"] = self._get_next_msg_seq(msg_id)
         if keyboard:
             payload["keyboard"] = keyboard
 
@@ -198,6 +165,35 @@ class MyClient(botpy.Client):
         )
         logging.info(f"📢 [单聊 Markdown 发送成功] UserOpenID: {user_openid}")
 
+    async def send_group_markdown_by_template(
+        self,
+        group_openid: str,
+        template_id: str,
+        params_dict: dict,
+        msg_id: str = "",
+        keyboard: dict = None,
+    ):
+        """通过自定义模板 ID 和参数列表发送 Markdown 消息"""
+        params = [
+            MessageMarkdownParams(key=k, values=v if isinstance(v, list) else [v])
+            for k, v in params_dict.items()
+        ]
+        markdown = MarkdownPayload(
+            custom_template_id=template_id, params=params
+        )
+        kwargs = {
+            "group_openid": group_openid,
+            "msg_type": 2,
+            "markdown": markdown,
+            "msg_id": msg_id,
+        }
+        if keyboard:
+            kwargs["keyboard"] = keyboard
+
+        await self.api.post_group_message(**kwargs)
+        logging.info(f"📢 [Markdown 模板发送成功] OpenID: {group_openid}")
+
+    # --- 富媒体图片发送 ---
     async def send_group_image(
         self,
         group_openid: str,
@@ -206,53 +202,48 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         ref_msg_id: str = None,
     ):
-        """发送群富媒体图片 (msg_type=7)"""
-        logging.info(f"🖼️ 正在处理群图片发送 | OpenID: {group_openid} | 资源: {file_path_or_url[:60]}")
+        """支持本地路径或网络 URL 发送群图片 (msg_type=7)"""
+        logging.info(f"🖼️ 正在处理群图片发送: {file_path_or_url}")
 
-        try:
-            if file_path_or_url.startswith("http://") or file_path_or_url.startswith("https://"):
-                upload_payload = {"file_type": 1, "url": file_path_or_url, "srv_send_msg": False}
-                upload_res = await self._raw_post(
-                    "/v2/groups/{group_openid}/files",
-                    upload_payload,
-                    group_openid=group_openid,
-                )
-            else:
-                if not os.path.exists(file_path_or_url):
-                    raise FileNotFoundError(f"本地图片不存在: {file_path_or_url}")
+        if file_path_or_url.startswith("http://") or file_path_or_url.startswith(
+            "https://"
+        ):
+            upload_res = await self.api.post_group_file(
+                group_openid=group_openid, file_type=1, url=file_path_or_url
+            )
+        else:
+            if not os.path.exists(file_path_or_url):
+                raise FileNotFoundError(f"本地图片不存在: {file_path_or_url}")
 
-                with open(file_path_or_url, "rb") as f:
-                    file_base64 = base64.b64encode(f.read()).decode("utf-8")
+            with open(file_path_or_url, "rb") as f:
+                file_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-                upload_payload = {"file_type": 1, "file_data": file_base64, "srv_send_msg": False}
-                upload_res = await self._raw_post(
-                    "/v2/groups/{group_openid}/files",
-                    upload_payload,
-                    group_openid=group_openid,
-                )
+            upload_payload = {"file_type": 1, "file_data": file_base64}
+            upload_res = await self._raw_post(
+                "/v2/groups/{group_openid}/files",
+                upload_payload,
+                group_openid=group_openid,
+            )
 
-            file_info = upload_res.get("file_info") if isinstance(upload_res, dict) else getattr(upload_res, "file_info", upload_res)
+        file_info = (
+            upload_res.get("file_info")
+            if isinstance(upload_res, dict)
+            else getattr(upload_res, "file_info", upload_res)
+        )
 
-            seq = self._get_next_msg_seq(msg_id)
-            kwargs = {
-                "group_openid": group_openid,
-                "msg_type": 7,
-                "msg_id": msg_id,
-                "msg_seq": seq,
-                "media": {"file_info": file_info},
-            }
-            if content:
-                kwargs["content"] = content
-            if ref_msg_id:
-                kwargs["message_reference"] = {"message_id": ref_msg_id}
+        kwargs = {
+            "group_openid": group_openid,
+            "msg_type": 7,
+            "msg_id": msg_id,
+            "media": {"file_info": file_info},
+        }
+        if content:
+            kwargs["content"] = content
+        if ref_msg_id:
+            kwargs["message_reference"] = {"message_id": ref_msg_id}
 
-            await self.api.post_group_message(**kwargs)
-            logging.info(f"🖼️ [群富媒体图片发送成功] OpenID: {group_openid}")
-
-        except Exception as e:
-            logging.error(f"❌ [群富媒体图片发送失败] OpenID: {group_openid} | 原因: {e}", exc_info=True)
-            if content:
-                await self.send_group_text(group_openid=group_openid, content=content, msg_id=msg_id)
+        await self.api.post_group_message(**kwargs)
+        logging.info(f"🖼️ [富媒体图片发送成功] OpenID: {group_openid}")
 
     async def send_c2c_image(
         self,
@@ -262,56 +253,56 @@ class MyClient(botpy.Client):
         msg_id: str = "",
         ref_msg_id: str = None,
     ):
-        """发送单聊富媒体图片 (msg_type=7)"""
-        logging.info(f"🖼️ 正在处理单聊图片发送: {file_path_or_url[:60]}")
+        """支持本地路径或网络 URL 发送单聊图片 (msg_type=7)"""
+        logging.info(f"🖼️ 正在处理单聊图片发送: {file_path_or_url}")
 
-        try:
-            if file_path_or_url.startswith("http://") or file_path_or_url.startswith("https://"):
-                upload_res = await self._raw_post(
-                    "/v2/users/{user_openid}/files",
-                    {"file_type": 1, "url": file_path_or_url, "srv_send_msg": False},
-                    user_openid=user_openid,
-                )
-            else:
-                if not os.path.exists(file_path_or_url):
-                    raise FileNotFoundError(f"本地图片不存在: {file_path_or_url}")
-
-                with open(file_path_or_url, "rb") as f:
-                    file_base64 = base64.b64encode(f.read()).decode("utf-8")
-
-                upload_payload = {"file_type": 1, "file_data": file_base64, "srv_send_msg": False}
-                upload_res = await self._raw_post(
-                    "/v2/users/{user_openid}/files",
-                    upload_payload,
-                    user_openid=user_openid,
-                )
-
-            file_info = upload_res.get("file_info") if isinstance(upload_res, dict) else getattr(upload_res, "file_info", upload_res)
-
-            seq = self._get_next_msg_seq(msg_id)
-            payload = {
-                "msg_type": 7,
-                "msg_id": msg_id,
-                "msg_seq": seq,
-                "media": {"file_info": file_info},
-            }
-            if content:
-                payload["content"] = content
-            if ref_msg_id:
-                payload["message_reference"] = {"message_id": ref_msg_id}
-
-            await self._raw_post(
-                "/v2/users/{user_openid}/messages",
-                payload,
+        if file_path_or_url.startswith("http://") or file_path_or_url.startswith(
+            "https://"
+        ):
+            upload_res = await self._raw_post(
+                "/v2/users/{user_openid}/files",
+                {"file_type": 1, "url": file_path_or_url},
                 user_openid=user_openid,
             )
-            logging.info(f"🖼️ [单聊富媒体图片发送成功] UserOpenID: {user_openid}")
+        else:
+            if not os.path.exists(file_path_or_url):
+                raise FileNotFoundError(f"本地图片不存在: {file_path_or_url}")
 
-        except Exception as e:
-            logging.error(f"❌ [单聊图片发送失败] UserOpenID: {user_openid} | 原因: {e}", exc_info=True)
-            if content:
-                await self.send_c2c_text(user_openid=user_openid, content=content, msg_id=msg_id)
+            with open(file_path_or_url, "rb") as f:
+                file_base64 = base64.b64encode(f.read()).decode("utf-8")
 
+            upload_payload = {"file_type": 1, "file_data": file_base64}
+            upload_res = await self._raw_post(
+                "/v2/users/{user_openid}/files",
+                upload_payload,
+                user_openid=user_openid,
+            )
+
+        file_info = (
+            upload_res.get("file_info")
+            if isinstance(upload_res, dict)
+            else getattr(upload_res, "file_info", upload_res)
+        )
+
+        payload = {
+            "msg_type": 7,
+            "media": {"file_info": file_info},
+        }
+        if content:
+            payload["content"] = content
+        if msg_id:
+            payload["msg_id"] = msg_id
+        if ref_msg_id:
+            payload["message_reference"] = {"message_id": ref_msg_id}
+
+        await self._raw_post(
+            "/v2/users/{user_openid}/messages",
+            payload,
+            user_openid=user_openid,
+        )
+        logging.info(f"🖼️ [单聊富媒体图片发送成功] UserOpenID: {user_openid}")
+
+    # --- 图文卡片 ---
     async def send_group_card(
         self,
         group_openid: str,
@@ -336,7 +327,6 @@ class MyClient(botpy.Client):
         }
         if msg_id:
             payload["msg_id"] = msg_id
-            payload["msg_seq"] = self._get_next_msg_seq(msg_id)
 
         await self._raw_post(
             "/v2/groups/{group_openid}/messages",
@@ -345,56 +335,200 @@ class MyClient(botpy.Client):
         )
         logging.info(f"🃏 [图文卡片发送成功] OpenID: {group_openid}")
 
+    # --- 指令面板 & 自定义菜单 ---
+    async def create_panel(
+        self,
+        scope: str,
+        panel: dict,
+        target_type: str = "all",
+        user_openids: list = None,
+        group_openids: list = None,
+    ):
+        """创建指令面板，仅支持 c2c 和 group 场景"""
+        if scope not in ["c2c", "group"]:
+            raise ValueError("仅支持 c2c 或 group 场景创建面板")
+
+        payload = {
+            "scope": scope,
+            "target_type": target_type,
+            "panel": panel,
+        }
+        if scope == "c2c" and target_type == "specific" and user_openids:
+            payload["user_openids"] = user_openids
+        elif scope == "group" and target_type == "specific" and group_openids:
+            payload["group_openids"] = group_openids
+
+        res = await self._raw_post("/v2/panels", payload)
+        logging.info(f"📋 [创建指令面板成功] Scope: {scope}, Response: {res}")
+        return res
+
+    async def set_c2c_menu(self, menu: dict):
+        """修改 C2C 全局自定义菜单"""
+        payload = {"menu": menu}
+        res = await self._raw_put("/v2/menu", payload)
+        logging.info(f"📌 [修改C2C自定义菜单成功] Response: {res}")
+        return res
+
     # =========================================================================
-    # 5. 系统通知与群查找辅助
+    # 4. SERVER / 外部调用与系统辅助
     # =========================================================================
-    def _get_group_openid_by_num(self, target_num: int) -> str:
-        """根据群编号查找 群 OpenID"""
-        opsetting = self.data_mgr.get_opsetting()
+    async def api_send_c2c_text(self, user_openid: str, content: str):
+        """供 Server 调用的主动发送私聊纯文本消息接口，并同步写入聊天记录"""
+        try:
+            await self.send_c2c_text(user_openid=user_openid, content=content)
+            # 使用标准的 append_c2c_message 写入，助手角色指定为 assistant
+            self.data_mgr.append_c2c_message(
+                user_id=user_openid, content=content, role="assistant"
+            )
+            return True
+        except Exception as e:
+            logging.error(f"❌ [Server 发送 C2C 消息被拒收/报错] UserOpenID: {user_openid}, 原因: {e}")
+            return False
+
+    async def api_send_group_text(self, group_openid: str, content: str):
+        """供 Server 调用的主动发送群聊纯文本消息接口，并同步写入聊天记录"""
+        try:
+            await self.send_group_text(group_openid=group_openid, content=content)
+            # 使用标准的 append_group_message 写入
+            self.data_mgr.append_group_message(
+                group_id=group_openid, user_id="BOT", content=content, role="assistant"
+            )
+            return True
+        except Exception as e:
+            logging.error(f"❌ [Server 发送 Group 消息被拒收/报错] GroupOpenID: {group_openid}, 原因: {e}")
+            return False
+
+    def _get_group_openid_by_num(self, target_group_num, opsetting: dict = None):
+        """获取指定编号对应的群 OpenID
+        查找优先级：优先从 opsetting["group_tags"] 读取，其次从 groupinfo (get_group_list/get_group_tag) 读取
+        """
+        if target_group_num is None:
+            return None
+
+        eff_str = str(target_group_num)
+        if opsetting is None:
+            opsetting = self.data_mgr.get_opsetting()
+
+        # 1. 优先从 opsetting 的 group_tags 读取
         group_tags = opsetting.get("group_tags", {})
-
         if isinstance(group_tags, dict):
-            for k, v in group_tags.items():
-                if str(k).isdigit() and int(k) == target_num:
-                    return str(v)
-                if str(v).isdigit() and int(v) == target_num:
-                    return str(k)
+            # 兼容 {"1": "openid_xxx"} 格式
+            if eff_str in group_tags and isinstance(group_tags[eff_str], str):
+                return group_tags[eff_str]
+            # 兼容 {"openid_xxx": 1} 或 {"openid_xxx": "1"} 格式
+            for gid, tag in group_tags.items():
+                if str(tag) == eff_str:
+                    return gid
 
+        # 2. 其次从 groupinfo (get_group_list / get_group_tag) 中读取
         group_list = self.data_mgr.get_group_list()
-        for g in group_list:
-            tag_num = g.get("tag_num")
-            grouptag = g.get("grouptag")
-            if (tag_num is not None and int(tag_num) == target_num) or (
-                grouptag and str(grouptag).isdigit() and int(grouptag) == target_num
-            ):
-                return g.get("group_id", "")
+        for g_info in group_list:
+            gid = g_info.get("group_id")
+            tag_num = g_info.get("tag_num")
+            grouptag = g_info.get("grouptag")
+            direct_tag = self.data_mgr.get_group_tag(gid) if gid else ""
 
-        return ""
+            if (
+                (tag_num is not None and str(tag_num) == eff_str)
+                or (grouptag is not None and str(grouptag) == eff_str)
+                or (direct_tag and str(direct_tag) == eff_str)
+            ):
+                return gid
+
+        return None
 
     async def notify_group_3(self, message: str):
-        """上下线通知群"""
+        """上下线通知群（从 opsetting 读取提醒群编号，默认群 3；优先 opsetting 读取 group_tags，其次 groupinfo）"""
+        # 1. 从 opsetting 中读取提醒群编号
         opsetting = self.data_mgr.get_opsetting()
-        notify_group_num = opsetting.get("notify_group_num", 3)
+        target_group_num = opsetting.get("notify_group_num", 3)
 
-        target_openid = self._get_group_openid_by_num(int(notify_group_num))
+        # 2. 定位 OpenID：优先 opsetting["group_tags"]，其次 groupinfo
+        target_openid = self._get_group_openid_by_num(target_group_num, opsetting)
 
         if target_openid:
             try:
-                await self.send_group_text(group_openid=target_openid, content=message)
-                logging.info(f"📢 [群{notify_group_num}通知成功] 内容: {message}")
+                await self.api.post_group_message(
+                    group_openid=target_openid, msg_type=0, content=message
+                )
+                logging.info(
+                    f"📢 [群{target_group_num}通知成功] 内容: {message}"
+                )
             except Exception as e:
-                logging.error(f"❌ 发送群 {notify_group_num} 通知失败: {e}")
+                logging.error(
+                    f"❌ 发送群 {target_group_num} 通知失败: {e}"
+                )
         else:
-            logging.info(f"ℹ️ 未绑定【群 {notify_group_num}】，跳过通知。")
+            logging.info(
+                f"ℹ️ 未绑定【群 {target_group_num}】，跳过通知。"
+            )
 
     async def shutdown_system(self, reason: str = "系统下线"):
         logging.info(f"🛑 正在执行系统退出程序... 原因: {reason}")
-        await self.notify_group_3(f"🔴 机器人收到下线指令 ({reason})，正在退出...")
+        if hasattr(self, "youzai_mgr") and self.youzai_mgr:
+            await self.youzai_mgr.close_connection()
+        await self.notify_group_3(
+            f"🔴 机器人收到下线指令 ({reason})，正在退出..."
+        )
         await asyncio.sleep(1)
         os._exit(0)
 
+    async def push_message_to_group(
+        self, msg_content: str, target_group_num: str = None
+    ):
+        """推送消息到指定群，接入新版 data_mgr 协议"""
+        push_active = self.data_mgr.get_extra_data("push_active", True)
+        if not push_active:
+            logging.info("ℹ️ Push 功能已关闭，跳过推送。")
+            return
+
+        # 1. 从 opsetting 读取默认推送群配置
+        opsetting = self.data_mgr.get_opsetting()
+        default_push_group = opsetting.get("push_target_group", None)
+
+        target_openid, warning_msg = None, ""
+        effective_group_num = target_group_num or default_push_group
+
+        # 2. 定位 OpenID：优先 opsetting["group_tags"]，其次 groupinfo
+        if effective_group_num:
+            target_openid = self._get_group_openid_by_num(effective_group_num, opsetting)
+
+        # 3. 如果未定位到对应的群，降级寻找绑定的群 1
+        if not target_openid:
+            target_openid = self._get_group_openid_by_num(1, opsetting)
+
+            if effective_group_num and target_openid:
+                warning_msg = f"\n\n⚠️ [系统提示] 未找到绑定的群 {effective_group_num}，已默认推送至群 1"
+
+        if not target_openid:
+            logging.error(
+                f"❌ 推送失败：未找到群 {effective_group_num}，且数据库中未绑定【群 1】。"
+            )
+            return
+
+        full_content = f"{msg_content}{warning_msg}"
+
+        # 4. 使用标准的 append_push_history 接口追加记录
+        self.data_mgr.append_push_history({
+            "target_group": effective_group_num,
+            "target_openid": target_openid,
+            "content": full_content,
+            "role": "push",
+        })
+
+        try:
+            await self.api.post_group_message(
+                group_openid=target_openid,
+                msg_type=0,
+                content=full_content,
+            )
+            logging.info(f"📢 [推送成功] OpenID: {target_openid}")
+
+        except Exception as e:
+            logging.error(f"❌ 推送消息被拒收/失败: {e}")
+
     # =========================================================================
-    # 6. 指令处理与统一回复分发逻辑
+    # 5. 指令处理与统一回复分发逻辑
     # =========================================================================
     def handle_op_command(
         self,
@@ -408,7 +542,7 @@ class MyClient(botpy.Client):
     async def send_reply(
         self, res: dict, target_id: str, msg_id: str, is_c2c: bool = False
     ):
-        """统一合并的回复发送函数"""
+        """统一合并的回复发送函数，根据 res 数据字典中的 msg_type 参数分发逻辑"""
         msg_type = res.get("msg_type", 0)
         reply_content = res.get("content", "")
 
@@ -473,6 +607,7 @@ class MyClient(botpy.Client):
                     msg_id=msg_id,
                 )
 
+        # 自动记录机器人的回复 ( role 使用 assistant )
         if reply_content:
             if is_c2c:
                 self.data_mgr.append_c2c_message(
@@ -492,31 +627,11 @@ class MyClient(botpy.Client):
         is_c2c: bool = False,
     ):
         target_id = sender_openid if is_c2c else group_id
-
         cmd_text = content[1:].strip()
         parts = cmd_text.split()
         cmd = parts[0].lower() if parts else ""
 
-        # ------------------- #y / #yxxx 按需连接并转发至 YouzaiBot -------------------
-        if cmd_text.startswith("y"):
-            yb_command = cmd_text[1:].strip()
-            if not yb_command:
-                yb_command = "帮助"
-
-            yz_res = await self.youzai_mgr.send_command(
-                command_text=yb_command,
-                sender_openid=sender_openid,
-                raw_message=raw_message,
-                group_id=group_id,
-                is_c2c=is_c2c,
-            )
-
-            if isinstance(yz_res, dict):
-                await self.send_reply(yz_res, target_id, raw_message.id, is_c2c=is_c2c)
-                return None
-            return yz_res
-
-        # ------------------- #op 管理指令 -------------------
+        # #op 指令分发与动态消息类型处理
         if cmd == "op":
             op_res = self.handle_op_command(
                 parts[1:], sender_openid, raw_message, group_id
@@ -531,7 +646,6 @@ class MyClient(botpy.Client):
                 return None
             return op_res
 
-        # ------------------- #ping 运行状态探针 -------------------
         if cmd == "ping":
             elapsed_seconds = int(time.time() - self.start_time)
             days, remainder = divmod(elapsed_seconds, 86400)
@@ -547,59 +661,76 @@ class MyClient(botpy.Client):
                 uptime_str += f"{minutes}分"
             uptime_str += f"{seconds}秒"
 
+            # 使用标准的 is_system_active 检查激活状态
             system_active = self.data_mgr.is_system_active()
             status_text = "正常开启" if system_active else "暂停维护中"
             return (
                 f"Pong! 机器人正常运行中 ⚡\n当前服务状态：{status_text}\n已连续运行：{uptime_str}"
             )
 
+        # 维护状态下，直接返回 None，不响应其他指令
         if not self.data_mgr.is_system_active():
             return None
 
-        # ------------------- #game 等业务小游戏分发 -------------------
+        # ------------------- #y / #yxxx 按需连接并转发至 YouzaiBot (15min自动断开) -------------------
+        if cmd_text.startswith("y"):
+            yb_command = cmd_text[1:].strip()
+            if not yb_command:
+                yb_command = "帮助"
+
+            yz_res = await self.youzai_mgr.send_command(self,
+                command_text=yb_command,
+                sender_openid=sender_openid,
+                raw_message=raw_message,
+                group_id=group_id,
+                is_c2c=is_c2c,
+            )
+
+            if isinstance(yz_res, dict):
+                await self.send_reply(yz_res, target_id, raw_message.id, is_c2c=is_c2c)
+                return None
+            return yz_res
+
+        # ------------------- #game 等其他指令分发与动态消息类型处理 -------------------
         game_res = self.game_sys.handle_command(cmd, parts, sender_openid)
+
+        # 支持 handle_command 返回字典格式，灵活判定 msg_type
         if isinstance(game_res, dict):
             await self.send_reply(game_res, target_id, raw_message.id, is_c2c=is_c2c)
             return None
 
+        # 若返回普通字符串，则交给 _handle_group_msg / _handle_c2c_msg 发送纯文本消息
         return game_res
 
     # =========================================================================
-    # 7. 事件接收与回调处理 (直接提取原生 content，简化逻辑)
+    # 6. 事件接收与回调处理 (群消息 & 私聊消息)
     # =========================================================================
     async def _handle_group_msg(self, message: GroupMessage, event_name: str):
-        msg_id = getattr(message, "id", "")
-
-        # 校验并过滤 60s 内相同 msg_id 的重复事件
-        if self._is_duplicate_msg(msg_id):
-            logging.info(f"⏭️ [{event_name}] [已跳过重复群消息事件] MsgID: {msg_id}")
-            return
-
         content = getattr(message, "content", "").strip()
         group_id = getattr(message, "group_openid", "")
+        msg_id = getattr(message, "id", "")
         author = getattr(message, "author", None)
-        sender_openid = getattr(author, "member_openid", "未知用户") if author else "未知用户"
+        sender_openid = (
+            getattr(author, "member_openid", "未知用户") if author else "未知用户"
+        )
         sender_openid = sender_openid.upper()
 
-        username = getattr(author, "username", "") if author else ""
-
         logging.info(
-            f"[{event_name}] 群消息 | 群ID: {group_id} | 发送者: {sender_openid} "
-            f"({username or '无昵称'}) | 内容: {content}"
+            f"[{event_name}] 群消息 | 群ID: {group_id} | 发送者: {sender_openid} |"
+            f" 内容: {content}"
         )
 
-        if username:
-            self.data_mgr.set_user_info(sender_openid, {"nickname": username})
-
+        # 自动记录接收到的群聊消息（传入 sender_openid 自动记录/更新用户信息）
         if content:
             self.data_mgr.append_group_message(
-                group_id=group_id, user_id=sender_openid, content=content, user_nickname=username, role="user"
+                group_id=group_id, user_id=sender_openid, content=content, role="user"
             )
 
-        # 规整指令前缀
+        # 如果消息开头为 TARGET_BOT_PREFIX，移除 @ 后自动去除开头的多余空格
         if content.startswith(TARGET_BOT_PREFIX):
-            content = content[len(TARGET_BOT_PREFIX):].strip()
+            content = content[len(TARGET_BOT_PREFIX) :].strip()
 
+        # 校验并归一化指令前缀，支持 #、/、/# 开头
         if content.startswith("/#"):
             content = "#" + content[2:].lstrip("#").strip()
         elif content.startswith(("#", "/")):
@@ -609,41 +740,38 @@ class MyClient(botpy.Client):
             reply_text = await self.process_command(
                 content, sender_openid, message, group_id, is_c2c=False
             )
-            if reply_text:
+            if reply_text:  # 仅在有返回文字时才进行普通消息发送
                 try:
-                    await self.send_group_text(group_openid=group_id, content=reply_text, msg_id=msg_id)
+                    await self.api.post_group_message(
+                        group_openid=group_id, msg_type=0, msg_id=msg_id, content=reply_text
+                    )
+                    # 自动记录机器人的文本回复
                     self.data_mgr.append_group_message(
                         group_id=group_id, user_id="BOT", content=reply_text, role="assistant"
                     )
                 except Exception as e:
-                    logging.error(f"群指令回复失败: {e}")
+                    logging.error(f"指令回复失败: {e}")
 
     async def _handle_c2c_msg(self, message: C2CMessage, event_name: str):
-        msg_id = getattr(message, "id", "")
-
-        if self._is_duplicate_msg(msg_id):
-            logging.info(f"⏭️ [{event_name}] [已跳过重复私聊消息事件] MsgID: {msg_id}")
-            return
-
         content = getattr(message, "content", "").strip()
+        msg_id = getattr(message, "id", "")
         author = getattr(message, "author", None)
-        sender_openid = getattr(author, "user_openid", "未知用户") if author else "未知用户"
+        sender_openid = (
+            getattr(author, "user_openid", "未知用户") if author else "未知用户"
+        )
         sender_openid = sender_openid.upper()
 
-        username = getattr(author, "username", "") if author else ""
-
         logging.info(
-            f"[{event_name}] 单聊消息 | 发送者: {sender_openid} ({username or '无昵称'}) | 内容: {content}"
+            f"[{event_name}] 单聊消息 | 发送者: {sender_openid} | 内容: {content}"
         )
 
-        if username:
-            self.data_mgr.set_user_info(sender_openid, {"nickname": username})
-
+        # 自动记录接收到的私聊消息
         if content:
             self.data_mgr.append_c2c_message(
-                user_id=sender_openid, content=content, user_nickname=username, role="user"
+                user_id=sender_openid, content=content, role="user"
             )
 
+        # 校验并归一化指令前缀，支持 #、/、/# 开头
         if content.startswith("/#"):
             content = "#" + content[2:].lstrip("#").strip()
         elif content.startswith(("#", "/")):
@@ -655,7 +783,10 @@ class MyClient(botpy.Client):
             )
             if reply_text:
                 try:
-                    await self.send_c2c_text(user_openid=sender_openid, content=reply_text, msg_id=msg_id)
+                    await self.send_c2c_text(
+                        user_openid=sender_openid, content=reply_text, msg_id=msg_id
+                    )
+                    # 自动记录机器人的文本回复
                     self.data_mgr.append_c2c_message(
                         user_id=sender_openid, content=reply_text, role="assistant"
                     )
