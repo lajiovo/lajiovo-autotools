@@ -31,10 +31,14 @@ class YunzaiWSClient:
         self.listen_task = None
         self.lock = asyncio.Lock()
 
-        # 双向 ID 映射与最新消息 ID 记录表
+         # 双向 ID 映射与最新消息 ID 记录表
         self.fake_to_user_openid = {}
         self.fake_to_group_openid = {}
         self.recent_msg_ids = {}
+        self.msg_seq_counters = {}
+        self._global_seq_counter = 0
+        self._target_locks = {}
+        self._last_send_times = {}
 
     def get_or_create_fake_user_id(self, user_openid: str) -> int:
         """为每个用户生成一个随机且持久化落盘的 8 位数字假 ID 并记录映射
@@ -245,14 +249,99 @@ class YunzaiWSClient:
 
         # 尝试匹配该目标最近的消息 ID 进行回复关联
         raw_msg_id = self.recent_msg_ids.get(fake_key, "")
+        seq_key = f"{fake_key}_{raw_msg_id}" if raw_msg_id else fake_key
 
+        # 为每个 TargetOpenID 建立独立的串行锁，防止文本与图片并发请求碰撞
+        if target_openid not in self._target_locks:
+            self._target_locks[target_openid] = asyncio.Lock()
+
+        async with self._target_locks[target_openid]:
+            # 1. 发送频率控制：对同一目标连续推文加入 0.4 秒微缓冲，避免触发 QQ 服务器风控去重
+            now_t = time.time()
+            last_t = self._last_send_times.get(target_openid, 0)
+            if now_t - last_t < 0.4:
+                await asyncio.sleep(0.4 - (now_t - last_t))
+            self._last_send_times[target_openid] = time.time()
+
+            # 2. 目标与消息 ID 绑定的严格单调递增 msg_seq 维护 (从 1 开始)
+            current_seq = self.msg_seq_counters.get(seq_key, 0) + 1
+            self.msg_seq_counters[seq_key] = current_seq
+
+            # 将递增 msg_seq 注入解析结果
+            if isinstance(parsed_res, dict):
+                parsed_res["msg_seq"] = current_seq
+
+            try:
+                logging.info(f"🚀 [Yunzai 常驻自由推文] -> 真实 TargetOpenID: {target_openid} (is_c2c={is_c2c}, msg_seq={current_seq})")
+                client_target = getattr(self, "bot", None)
+                if client_target and hasattr(client_target, "send_reply"):
+                    await self._send_with_retry(
+                        client_target,
+                        parsed_res,
+                        target_openid,
+                        raw_msg_id,
+                        is_c2c,
+                        current_seq,
+                        fake_key=fake_key,
+                        seq_key=seq_key,
+                    )
+            except Exception as e:
+                logging.error(f"❌ 自动发送推文给 {target_openid} 失败: {e}")
+
+    async def _send_with_retry(
+        self,
+        client_target,
+        parsed_res,
+        target_openid,
+        raw_msg_id,
+        is_c2c,
+        msg_seq,
+        fake_key="",
+        seq_key="",
+    ):
+        """发送消息并支持链式消息 ID 更新与 40054005 去重自增重试"""
         try:
-            logging.info(f"🚀 [Yunzai 常驻自由推文] -> 真实 TargetOpenID: {target_openid} (is_c2c={is_c2c})")
-            client_target = getattr(self, "bot", None)
-            if client_target and hasattr(client_target, "send_reply"):
-                await client_target.send_reply(parsed_res, target_openid, raw_msg_id, is_c2c=is_c2c)
+            try:
+                res = await client_target.send_reply(
+                    parsed_res, target_openid, raw_msg_id, is_c2c=is_c2c, msg_seq=msg_seq
+                )
+            except TypeError:
+                res = await client_target.send_reply(
+                    parsed_res, target_openid, raw_msg_id, is_c2c=is_c2c
+                )
+
+            # 优化方案：若成功拿到发送返回结果，尝试更新 recent_msg_ids 实现链式引用 ID 刷新
+            new_id = None
+            if isinstance(res, dict) and res.get("id"):
+                new_id = res["id"]
+            elif hasattr(res, "id") and getattr(res, "id"):
+                new_id = getattr(res, "id")
+
+            if new_id and fake_key:
+                self.recent_msg_ids[fake_key] = new_id
+
         except Exception as e:
-            logging.error(f"❌ 自动发送推文给 {target_openid} 失败: {e}")
+            err_str = str(e)
+            if "40054005" in err_str or "msgseq" in err_str or "去重" in err_str:
+                # 延时 0.5 秒避开并发时间窗，递增 msg_seq 重试
+                await asyncio.sleep(0.5)
+                retry_seq = (self.msg_seq_counters.get(seq_key, msg_seq) or msg_seq) + 1
+                self.msg_seq_counters[seq_key] = retry_seq
+                logging.warning(
+                    f"⚠️ 检测到 msg_seq 去重错误 (40054005)，等待 0.5s 重新生成 msg_seq={retry_seq} 进行重试..."
+                )
+                if isinstance(parsed_res, dict):
+                    parsed_res["msg_seq"] = retry_seq
+                try:
+                    await client_target.send_reply(
+                        parsed_res, target_openid, raw_msg_id, is_c2c=is_c2c, msg_seq=retry_seq
+                    )
+                except TypeError:
+                    await client_target.send_reply(
+                        parsed_res, target_openid, raw_msg_id, is_c2c=is_c2c
+                    )
+            else:
+                raise e
 
     async def close_connection(self):
         """主动断开 WebSocket 连接与清理后台任务"""
@@ -303,9 +392,17 @@ class YunzaiWSClient:
 
             # 记录此 Fake 目标最近触发的消息 ID，方便常驻监听器回带
             if is_c2c:
-                self.recent_msg_ids[f"user_{fake_user_id}"] = raw_msg_id
+                fake_key = f"user_{fake_user_id}"
+                self.recent_msg_ids[fake_key] = raw_message.id
+                self.fake_to_user_openid[fake_user_id] = sender_openid
             else:
-                self.recent_msg_ids[f"group_{fake_group_id}"] = raw_msg_id
+                fake_key = f"group_{fake_group_id}"
+                self.recent_msg_ids[fake_key] = raw_message.id
+                self.fake_to_group_openid[fake_group_id] = group_id
+
+            # 以 raw_message.id 结合目标绑定独立序号计数，新指令触发时重置
+            seq_key = f"{fake_key}_{raw_message.id}"
+            self.msg_seq_counters[seq_key] = 0
 
             now = int(time.time())
             msg_id_str = str(raw_msg_id)
