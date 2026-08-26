@@ -78,7 +78,7 @@ AUTH_FILE = get_config("lk.site.auth_file")
 CACHE_DIR = get_config("lk.site.cache_dir")
 
 # Shadowrocket 代理设置
-PROXY_SERVER = get_config("lk.network.proxy_server")
+PROXY_SERVER = get_config("proxy.http")
 PROXIES_DICT = (
     {"http": PROXY_SERVER, "https": PROXY_SERVER} if PROXY_SERVER else {}
 )
@@ -874,7 +874,7 @@ async def crawl_lightnovel_to_epub(
         return downloaded_epubs
 
 if __name__ == "__main__":
-    bid = sys.argv[1] if len(sys.argv) > 1 else "15275"
+    bid = sys.argv[1] if len(sys.argv) > 1 else get_config("lk.default_book")
     asyncio.run(
         crawl_lightnovel_to_epub(
             book_id=bid,

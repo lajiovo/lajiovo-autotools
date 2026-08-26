@@ -1,3 +1,8 @@
+# 代理设置
+proxy:
+  http: "http://192.168.10.13:1082"
+  socks: "socks5://192.168.10.13:1082"
+
 # ==================== zAlas ====================
 alas:
   # Alas 启动器路径
@@ -78,12 +83,10 @@ lk:
     # 认证文件路径
     auth_file: "lkauth.json"
     # 缓存目录
-    cache_dir: "lkache"
+    cache_dir: "lkcache"
 
-  # 网络与代理配置
-  network:
-    # Shadowrocket 代理服务器
-    proxy_server: "http://192.168.10.8:1082"
+  # 默认下载
+  default_book: "0"
 
 # ==================== MuMu 模拟器配置 ====================
 mumu:
@@ -171,6 +174,7 @@ bot:
       - "D:\\???\\AzurPilot\\log"
       - "D:\\???\\Perseus\\logs"
       - "D:\\???\\Perseus\\QBot"
+      - "D:\\???\\Perseus\\yunzai\\logs"
 
     # Alas 错误日志专有路径
     alas_error_log_path: "D:\\???\\AzurPilot\\log\\error\\alas"
