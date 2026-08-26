@@ -14,8 +14,9 @@ def run_alas_mumu_check():
     """
     # 0. 初始检测：若 MuMu 未运行，则拉起并隐藏（不计数）
     if not zMumu.is_mumu_running():
-        print("[Info] 检测到 MuMu 未运行，正在启动并隐藏 MuMu...")
-        zMumu.hidemumu()
+        print("[Info] 检测到 MuMu 未运行")
+    print("不管那么多了，先尝试隐藏再说")
+    zMumu.hidemumu()
 
     alas_soft_restart_count = 0  # Alas 软重启 (Playwright ["restart"]) 计数
     alas_hard_restart_count = 0  # Alas 硬重启 (cleanup + start) 计数
@@ -181,6 +182,15 @@ def Handlepush(msg_dict: dict):
                         "Auto-restart Triggered",
                         f"AzurPilot is auto-restarting the game.{raw_msg}",
                     )
+                    print("保险起见，确保隐藏窗口先")
+                    if not zMumu.hidemumu():
+                        print("wtf,这也报错，为什么隐藏失败")
+                        PerseusWarningMsg(
+                        "Failed to hide mumu window",
+                        f"Maybe sth wrong.{raw_msg}",
+                    )
+                    else:
+                        print("已确保窗口无问题")
 
                 elif (
                     "RequestHumanTakeover" in body

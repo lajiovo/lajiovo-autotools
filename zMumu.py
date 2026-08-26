@@ -7,6 +7,7 @@ import traceback
 import psutil
 import win32gui
 import win32con
+from zAlas import force_hide_window
 from pynput.keyboard import Key, Controller
 from zBarkCustom import PerseusNotifyMsg, PerseusErrorMsg, PerseusWarningMsg
 
@@ -183,11 +184,12 @@ def hidemumu_attempt():
             
             # 【组合技 1】：利用管理员 API 权限强制隐藏每一个找到的句柄
             for hwnd in mumu_hwnds:
-                hide_hwnd_admin(hwnd)
+                force_hide_window(hwnd)
+                # hide_hwnd_admin(hwnd)
             
             # 【组合技 2】：发送系统全局快捷键
-            print(f"  └─ 发送快捷键: Ctrl + Alt + Right")
-            send_hide_hotkey()
+            # print(f"  └─ 发送快捷键: Ctrl + Alt + Right")
+            # send_hide_hotkey()
         else:
             print(f"[{int(elapsed_time)}s] 当前未检测到真实的 MuMu 实体窗口...")
             # 如果已经超过最少持续时间且无窗口，说明窗口已被成功隐藏/关闭
