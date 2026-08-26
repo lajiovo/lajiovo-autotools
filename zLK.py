@@ -21,6 +21,11 @@ import time
 from datetime import datetime
 from urllib.parse import urljoin
 
+import tkinter as tk
+from tkinter import ttk, messagebox
+import threading
+import subprocess
+
 from ebooklib import epub
 from playwright.async_api import async_playwright
 import requests
@@ -74,6 +79,7 @@ VIEWPORT = get_config("lk.site.viewport")
 DOMAIN = get_config("lk.site.domain")
 AUTH_FILE = get_config("lk.site.auth_file")
 CACHE_DIR = get_config("lk.site.cache_dir")
+NOVEL_DIR = get_config("lk.novel_dir")
 
 # 代理配置
 PROXY_SERVER = get_config("proxy.http")
@@ -340,7 +346,7 @@ async def safe_goto(page, url: str, retries: int = 3):
 
 async def crawl_lightnovel_to_epub(
     book_id: str = None,
-    output_dir: str = ".",
+    output_dir: str = None,
     headless: bool = True,
     only_redownload_images: bool = False,
     to_simplified: bool = True,
@@ -348,6 +354,9 @@ async def crawl_lightnovel_to_epub(
 ):
     """轻之国度小说爬取并合成 EPUB 主模块函数"""
     headers = {"User-Agent": USER_AGENT, "Referer": DOMAIN}
+
+    if not output_dir:
+        output_dir = NOVEL_DIR or "."
 
     if only_redownload_images:
         use_cache_only = True
@@ -1001,14 +1010,184 @@ async def crawl_lightnovel_to_epub(
         print(f"\n[✓] 所有任务完成，共打包导出 {len(downloaded_epubs)} 个 EPUB 文件。")
         return downloaded_epubs
 
+def launch_gui():
+    """启动 Tkinter 图形化界面"""
+    root = tk.Tk()
+    root.title("轻之国度 EPUB 下载与合成工具")
+    root.geometry("820x600")
+
+    # 1. 顶部标题和说明
+    top_frame = ttk.Frame(root, padding=10)
+    top_frame.pack(fill=tk.X)
+    ttk.Label(top_frame, text="轻之国度 EPUB 转换管理工具", font=("微软雅黑", 14, "bold")).pack(side=tk.LEFT)
+
+    # 2. 中部：缓存列表区域
+    list_frame = ttk.LabelFrame(root, text=" 本地缓存小说列表 ", padding=10)
+    list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+    tree_cols = ("id", "title", "time")
+    tree = ttk.Treeview(list_frame, columns=tree_cols, show="headings", height=8)
+    tree.heading("id", text="书籍 ID")
+    tree.heading("title", text="小说标题")
+    tree.heading("time", text="缓存时间")
+
+    tree.column("id", width=90, anchor=tk.CENTER)
+    tree.column("title", width=420, anchor=tk.W)
+    tree.column("time", width=180, anchor=tk.CENTER)
+
+    scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+    tree.configure(yscroll=scrollbar.set)
+
+    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def load_cache_metadata():
+        """读取 CACHE_DIR 下的所有元数据"""
+        for row in tree.get_children():
+            tree.delete(row)
+
+        if not os.path.exists(CACHE_DIR):
+            return
+
+        for dname in sorted(os.listdir(CACHE_DIR)):
+            dpath = os.path.join(CACHE_DIR, dname)
+            if os.path.isdir(dpath):
+                meta_p = os.path.join(dpath, "metadata.json")
+                b_id = dname
+                b_title = dname
+                b_time = "未知时间"
+                if os.path.exists(meta_p):
+                    try:
+                        with open(meta_p, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                            b_id = str(meta.get("book_id", dname))
+                            b_title = meta.get("title", dname)
+                            c_at = meta.get("crawled_at", "")
+                            if c_at:
+                                b_time = c_at.replace("T", " ")[:19]
+                    except Exception:
+                        pass
+                tree.insert("", tk.END, values=(b_id, b_title, b_time))
+
+    # 3. 参数控制与操作区域
+    ctrl_frame = ttk.LabelFrame(root, text=" 操作与配置 ", padding=10)
+    ctrl_frame.pack(fill=tk.X, padx=10, pady=5)
+
+    # Book ID 输入
+    bid_frame = ttk.Frame(ctrl_frame)
+    bid_frame.pack(fill=tk.X, pady=4)
+    ttk.Label(bid_frame, text="书籍 ID (Book ID):").pack(side=tk.LEFT, padx=(0, 5))
+    var_bid = tk.StringVar()
+    entry_bid = ttk.Entry(bid_frame, textvariable=var_bid, width=20)
+    entry_bid.pack(side=tk.LEFT, padx=(0, 10))
+
+    btn_refresh = ttk.Button(bid_frame, text="刷新缓存列表", command=load_cache_metadata)
+    btn_refresh.pack(side=tk.LEFT, padx=5)
+
+    def open_novel_dir():
+        out_p = os.path.abspath(NOVEL_DIR or ".")
+        os.makedirs(out_p, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(out_p)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", out_p])
+        else:
+            subprocess.Popen(["xdg-open", out_p])
+
+    btn_open_dir = ttk.Button(bid_frame, text="打开导出文件夹", command=open_novel_dir)
+    btn_open_dir.pack(side=tk.LEFT, padx=5)
+
+    # 选项开关
+    opt_frame = ttk.Frame(ctrl_frame)
+    opt_frame.pack(fill=tk.X, pady=6)
+
+    var_cache_only = tk.BooleanVar(value=False)
+    var_redownload_img = tk.BooleanVar(value=False)
+    var_to_simplified = tk.BooleanVar(value=True)
+    var_headless = tk.BooleanVar(value=False)
+
+    chk_cache_only = ttk.Checkbutton(opt_frame, text="仅纯缓存提取 (use_cache_only)", variable=var_cache_only)
+    chk_cache_only.pack(side=tk.LEFT, padx=(0, 15))
+
+    chk_redownload_img = ttk.Checkbutton(opt_frame, text="仅补齐/重载图片 (only_redownload)", variable=var_redownload_img)
+    chk_redownload_img.pack(side=tk.LEFT, padx=(0, 15))
+
+    chk_to_simplified = ttk.Checkbutton(opt_frame, text="繁体转简体 (to_simplified)", variable=var_to_simplified)
+    chk_to_simplified.pack(side=tk.LEFT, padx=(0, 15))
+
+    chk_headless = ttk.Checkbutton(opt_frame, text="无头模式 (headless)", variable=var_headless)
+    chk_headless.pack(side=tk.LEFT)
+
+    # 点击列表项填充 ID
+    def on_tree_select(event):
+        selected = tree.selection()
+        if selected:
+            val = tree.item(selected[0], "values")
+            if val:
+                var_bid.set(str(val[0]))
+                var_cache_only.set(True)
+
+    tree.bind("<<TreeviewSelect>>", on_tree_select)
+
+    # 状态栏与开始按钮
+    status_frame = ttk.Frame(root, padding=10)
+    status_frame.pack(fill=tk.X)
+
+    lbl_status = ttk.Label(status_frame, text="状态: 就绪", font=("微软雅黑", 10))
+    lbl_status.pack(side=tk.LEFT)
+
+    btn_start = ttk.Button(status_frame, text="开始处理 / 下载", style="Accent.TButton")
+    btn_start.pack(side=tk.RIGHT, ipadx=10)
+
+    def run_task():
+        bid = var_bid.get().strip()
+        if not bid and not var_cache_only.get():
+            messagebox.showwarning("警告", "请输入 Book ID 或从列表中选择已有项目！")
+            return
+
+        btn_start.config(state=tk.DISABLED)
+        lbl_status.config(text="状态: 正在处理中，请稍候...", foreground="blue")
+
+        def task_wrapper():
+            try:
+                res = asyncio.run(
+                    crawl_lightnovel_to_epub(
+                        book_id=bid if bid else None,
+                        output_dir=NOVEL_DIR,
+                        headless=var_headless.get(),
+                        only_redownload_images=var_redownload_img.get(),
+                        to_simplified=var_to_simplified.get(),
+                        use_cache_only=var_cache_only.get(),
+                    )
+                )
+                root.after(0, lambda: lbl_status.config(text=f"状态: 任务完成，成功导出 {len(res)} 个 EPUB", foreground="green"))
+                root.after(0, lambda: messagebox.showinfo("完成", f"任务已成功完成！\n导出文件数量: {len(res)}"))
+                root.after(0, load_cache_metadata)
+            except Exception as e:
+                root.after(0, lambda: lbl_status.config(text=f"状态: 处理失败 ({e})", foreground="red"))
+                root.after(0, lambda: messagebox.showerror("错误", f"执行发生错误:\n{e}"))
+            finally:
+                root.after(0, lambda: btn_start.config(state=tk.NORMAL))
+
+        threading.Thread(target=task_wrapper, daemon=True).start()
+
+    btn_start.config(command=run_task)
+
+    load_cache_metadata()
+    root.mainloop()
+
 if __name__ == "__main__":
-    bid = sys.argv[1] if len(sys.argv) > 1 else get_config("lk.default_book")
-    asyncio.run(
-        crawl_lightnovel_to_epub(
-            book_id=str(bid),
-            headless=False,
-            only_redownload_images=False,
-            to_simplified=True,     # 默认开启繁转简
-            use_cache_only=True,   # 重新爬取开启（True 则直接读取现有缓存合成）
+    if len(sys.argv) > 1:
+        bid = sys.argv[1]
+        asyncio.run(
+            crawl_lightnovel_to_epub(
+                book_id=str(bid),
+                output_dir=NOVEL_DIR,
+                headless=False,
+                only_redownload_images=False,
+                to_simplified=True,     # 默认开启繁转简
+                use_cache_only=False,   # 重新爬取开启（True 则直接读取现有缓存合成）
+            )
         )
-    )
+    else:
+        launch_gui()
