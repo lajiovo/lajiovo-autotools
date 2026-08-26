@@ -718,7 +718,7 @@ async def handle_op_command(
                     link_kb = [
                         [
                             ("🏠主页", f"{base_url}/main", True),
-                            ("🎛️控制", f"{base_url}/dash.index", True)
+                            ("🎛️控制", f"{base_url}/main/dash.html", True)
                         ],
                         [
                             ("🌐根域", f"{base_url}/", True),

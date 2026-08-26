@@ -30,7 +30,6 @@ import urllib3
 
 import zBarkCustom
 
-# 尝试导入 opencc 或 zhconv，如未安装则打印警告信息并自动兼容多种配置
 cc_converter = None
 try:
     import opencc
@@ -55,7 +54,6 @@ from zConfig import get_config
 # 禁用 requests/urllib3 的 SSL 警告提示
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 伪装 iPhone 15 配置及全套 HTTP Headers，防止被 TLS/WAF 阻断
 USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
@@ -77,7 +75,7 @@ DOMAIN = get_config("lk.site.domain")
 AUTH_FILE = get_config("lk.site.auth_file")
 CACHE_DIR = get_config("lk.site.cache_dir")
 
-# Shadowrocket 代理设置
+# 代理配置
 PROXY_SERVER = get_config("proxy.http")
 PROXIES_DICT = (
     {"http": PROXY_SERVER, "https": PROXY_SERVER} if PROXY_SERVER else {}
@@ -93,7 +91,7 @@ def get_request_session():
     return session
 
 def convert_t2s(text: str, enabled: bool = True) -> str:
-    """繁体转简体函数，支持 OpenCC ('t2s'/'t2s.json') 与 zhconv 兼容回退"""
+    """繁体转简体函数，仅在内存处理，支持 OpenCC 与 zhconv 兼容"""
     if not text or not enabled:
         return text
     if cc_converter == "zhconv":
@@ -118,7 +116,7 @@ def get_url_hash(url: str) -> str:
     return hashlib.md5(url.encode("utf-8")).hexdigest()
 
 def get_book_dir(book_title: str) -> str:
-    """获取小说一级缓存目录"""
+    """获取小说一级缓存目录（在线爬取模式下创建）"""
     safe_book = sanitize_filename(book_title)
     dir_path = os.path.join(CACHE_DIR, safe_book)
     os.makedirs(dir_path, exist_ok=True)
@@ -134,31 +132,31 @@ def save_book_metadata(book_title: str, metadata: dict):
     except Exception as e:
         print(f"  [!] 保存书籍元数据失败: {e}")
 
-def get_catalog_cache_path(book_title: str) -> str:
-    """获取小说目录结构缓存 (catalog.json) 路径"""
+def get_catalog_cache_path(book_title: str, target_book_dir: str = None) -> str:
+    """获取小说目录缓存 catalog.json 路径"""
+    if target_book_dir and os.path.exists(target_book_dir):
+        return os.path.join(target_book_dir, "catalog.json")
     return os.path.join(get_book_dir(book_title), "catalog.json")
 
-def load_catalog_cache(book_title: str) -> list:
-    """从本地读取完整的分卷章节目录结构"""
-    path = get_catalog_cache_path(book_title)
+def load_catalog_cache(book_title: str, target_book_dir: str = None) -> list:
+    """读取已保存的小说章节目录缓存 catalog.json"""
+    path = get_catalog_cache_path(book_title, target_book_dir)
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list) and len(data) > 0:
-                    return data
-        except Exception:
-            return []
+                return json.load(f)
+        except Exception as e:
+            print(f"  [!] 读取目录缓存 catalog.json 失败: {e}")
     return []
 
-def save_catalog_cache(book_title: str, volumes_data: list):
-    """保存完整的分卷章节目录结构到 catalog.json"""
-    path = get_catalog_cache_path(book_title)
+def save_catalog_cache(book_title: str, volumes_data: list, target_book_dir: str = None):
+    """持久化保存小说章节目录缓存 catalog.json"""
+    path = get_catalog_cache_path(book_title, target_book_dir)
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(volumes_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"  [!] 保存目录结构缓存失败: {e}")
+        print(f"  [!] 保存目录缓存失败: {e}")
 
 def get_chapter_dir(book_title: str, vol_name: str) -> str:
     """获取章节所在分卷的路径"""
@@ -182,15 +180,70 @@ def get_image_save_dir(book_title: str, vol_name: str = None) -> str:
     os.makedirs(dir_path, exist_ok=True)
     return dir_path
 
-def load_chapter_cache(book_title: str, vol_name: str, ch_title: str) -> dict:
-    """从分类目录读取指定章节的缓存"""
-    path = get_chapter_cache_path(book_title, vol_name, ch_title)
-    if os.path.exists(path):
+def load_chapter_cache(
+    book_title: str, 
+    vol_name: str, 
+    ch_title: str, 
+    target_book_dir: str = None, 
+    raw_vol_name: str = None, 
+    raw_ch_title: str = None
+) -> dict:
+    """从本地现有缓存读取指定章节的 JSON 数据，避免因繁简转换产生新建空目录"""
+    search_dirs = []
+    if target_book_dir and os.path.exists(target_book_dir):
+        search_dirs.append(target_book_dir)
+    
+    # 尝试按默认逻辑的路径
+    default_p = get_chapter_cache_path(book_title, vol_name, ch_title)
+    if os.path.exists(default_p):
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(default_p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data and "content" in data:
+                    data["json_dir"] = os.path.dirname(default_p)
+                    return data
         except Exception:
-            return {}
+            pass
+
+    target_vol_names = {vol_name, raw_vol_name, convert_t2s(vol_name, True), convert_t2s(vol_name, False)} - {None, ""}
+    target_ch_titles = {ch_title, raw_ch_title, convert_t2s(ch_title, True), convert_t2s(ch_title, False)} - {None, ""}
+
+    for s_dir in search_dirs:
+        if not os.path.exists(s_dir):
+            continue
+        vol_dirs = []
+        for dname in os.listdir(s_dir):
+            dpath = os.path.join(s_dir, dname)
+            if os.path.isdir(dpath) and dname != "images_mapped":
+                d_sim = convert_t2s(dname, True)
+                d_tra = convert_t2s(dname, False)
+                for tv in target_vol_names:
+                    if tv == dname or tv == d_sim or tv == d_tra or sanitize_filename(tv) == sanitize_filename(dname):
+                        vol_dirs.append(dpath)
+                        break
+
+        if not vol_dirs:
+            vol_dirs = [os.path.join(s_dir, d) for d in os.listdir(s_dir) if os.path.isdir(os.path.join(s_dir, d)) and d != "images_mapped"]
+
+        for v_dir in vol_dirs:
+            if not os.path.exists(v_dir):
+                continue
+            for fname in os.listdir(v_dir):
+                if fname.endswith(".json") and fname not in ("metadata.json", "catalog.json"):
+                    fname_no_ext = fname[:-5]
+                    f_sim = convert_t2s(fname_no_ext, True)
+                    f_tra = convert_t2s(fname_no_ext, False)
+                    for tc in target_ch_titles:
+                        if tc == fname_no_ext or tc == f_sim or tc == f_tra or sanitize_filename(tc) == sanitize_filename(fname_no_ext):
+                            f_path = os.path.join(v_dir, fname)
+                            try:
+                                with open(f_path, "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                                    if data and "content" in data:
+                                        data["json_dir"] = os.path.dirname(f_path)
+                                        return data
+                            except Exception:
+                                pass
     return {}
 
 def save_chapter_cache(book_title: str, vol_name: str, ch_title: str, ch_data: dict):
@@ -271,10 +324,9 @@ def download_image(url: str, headers: dict = None, cookies_dict: dict = None, re
     return None, None
 
 async def safe_goto(page, url: str, retries: int = 3):
-    """安全的页面加载函数，支持页面连带等待逻辑与防挂起机制"""
+    """安全的页面加载函数"""
     for attempt in range(retries):
         try:
-            # 降低单次加载超时时间为 25 秒，防止长时间死锁卡住
             await page.goto(url, wait_until="domcontentloaded", timeout=25000)
             await page.wait_for_timeout(1000)
             return True
@@ -348,6 +400,7 @@ async def crawl_lightnovel_to_epub(
         author = "未知"
         cover_url = ""
         volumes_data = []
+        target_book_dir = None
 
         cookies_dict = {}
 
@@ -375,16 +428,15 @@ async def crawl_lightnovel_to_epub(
             print(f"[+] 正在请求主页: {base_url}")
             await safe_goto(page, base_url)
 
-            # 滚动页面以触发 SPA / 懒加载渲染
             for _ in range(3):
                 await page.evaluate("window.scrollBy(0, 800)")
                 await page.wait_for_timeout(500)
 
-            # 多层级提取书名（含 meta 标签与多种 CSS 选择器）
+            # 多层级提取书名
             try:
                 meta_title = await page.get_attribute("meta[property='og:title']", "content", timeout=2000)
                 if meta_title:
-                    book_title = convert_t2s(meta_title.strip(), to_simplified)
+                    book_title = meta_title.strip()
             except Exception:
                 pass
 
@@ -397,7 +449,7 @@ async def crawl_lightnovel_to_epub(
                     try:
                         t_text = await page.inner_text(sel, timeout=1500)
                         if t_text and t_text.strip():
-                            book_title = convert_t2s(t_text.strip(), to_simplified)
+                            book_title = t_text.strip()
                             break
                     except Exception:
                         continue
@@ -406,12 +458,11 @@ async def crawl_lightnovel_to_epub(
             try:
                 meta_author = await page.get_attribute("meta[property='og:novel:author']", "content", timeout=2000)
                 if meta_author:
-                    author = convert_t2s(meta_author.strip(), to_simplified)
+                    author = meta_author.strip()
             except Exception:
                 pass
 
             if author == "未知":
-                # 兼容新版 .detail-info-line 中的作者字段
                 try:
                     author_spans = await page.query_selector_all(".detail-info-line span")
                     for span in author_spans:
@@ -421,7 +472,7 @@ async def crawl_lightnovel_to_epub(
                             if strong_el:
                                 author_raw = await strong_el.inner_text()
                                 if author_raw and author_raw.strip():
-                                    author = convert_t2s(author_raw.strip(), to_simplified)
+                                    author = author_raw.strip()
                                     break
                 except Exception:
                     pass
@@ -435,7 +486,7 @@ async def crawl_lightnovel_to_epub(
                     try:
                         a_text = await page.inner_text(sel, timeout=1500)
                         if a_text and a_text.strip():
-                            author = convert_t2s(a_text.strip(), to_simplified)
+                            author = a_text.strip()
                             break
                     except Exception:
                         continue
@@ -474,15 +525,13 @@ async def crawl_lightnovel_to_epub(
                 },
             )
 
-            print(f"[✓] 书名: {book_title} | 作者: {author}")
+            print(f"[✓] 书名: {convert_t2s(book_title, to_simplified)} | 作者: {convert_t2s(author, to_simplified)}")
 
-            # 检查本地是否已存在完整的分卷章节目录缓存，如有则直接载入并跳过网页解析
             cached_catalog = load_catalog_cache(book_title)
             if cached_catalog:
                 print(f"[✓] 检测到已完整缓存的章节目录 (catalog.json)，跳过分卷解析步骤。")
                 volumes_data = cached_catalog
             else:
-                # 1. 优先适配新版卷 Tab（.volume-tabs .volume-tab）点击切换提取机制
                 tab_locator = page.locator(".volume-tabs .volume-tab, .volume-tab")
                 tab_count = await tab_locator.count()
 
@@ -491,26 +540,13 @@ async def crawl_lightnovel_to_epub(
                     for i in range(tab_count):
                         try:
                             current_tab = tab_locator.nth(i)
-
-                            # 获取卷标题
                             v_title_raw = await current_tab.get_attribute("title") or await current_tab.inner_text()
-                            vol_title = convert_t2s(v_title_raw.strip(), to_simplified) if v_title_raw else f"第{i+1}卷"
+                            vol_title = v_title_raw.strip() if v_title_raw else f"第{i+1}卷"
 
-                            # 平滑滚动并点击当前卷 Tab，防止 DOM 重新渲染导致页面乱飞
                             await current_tab.scroll_into_view_if_needed(timeout=2000)
                             await current_tab.click(timeout=3000, force=True)
-
-                            # 增加等待时间，确保 AJAX/动态数据与 UI 渲染完毕后再进行后续提取
                             await page.wait_for_timeout(1500)
-                            try:
-                                await page.wait_for_selector(
-                                    ".chapter-grid a, .chapter-grid .chapter, a[href*='/reader/']", 
-                                    timeout=4000
-                                )
-                            except Exception:
-                                pass
 
-                            # 尝试点击展开目录按钮（如存在）
                             try:
                                 exp_btn = page.locator(".chapter-expand-button, .expand-catalog, .unfold-btn").first
                                 if await exp_btn.is_visible(timeout=1000):
@@ -519,7 +555,6 @@ async def crawl_lightnovel_to_epub(
                             except Exception:
                                 pass
 
-                            # 优先从当前卷网格容器 .chapter-grid 中提取章节链接
                             ch_links = await page.query_selector_all(".chapter-grid a, .chapter-grid .chapter")
                             if not ch_links:
                                 ch_links = await page.query_selector_all("a[href*='/reader/'], a[href*='/chapter/']")
@@ -536,16 +571,15 @@ async def crawl_lightnovel_to_epub(
                                 seen_urls.add(full_url)
 
                                 raw_c_title = await c_link.inner_text()
-                                c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
+                                c_title = raw_c_title.strip() or "无标题章节"
                                 chapters.append({"title": c_title, "url": full_url})
 
                             if chapters:
                                 volumes_data.append({"vol_title": vol_title, "chapters": chapters})
-                                print(f"  [✓] 成功解析分卷【{vol_title}】，获取 {len(chapters)} 章")
+                                print(f"  [✓] 成功解析分卷【{convert_t2s(vol_title, to_simplified)}】，获取 {len(chapters)} 章")
                         except Exception as e:
                             print(f"  [!] 提取第 {i+1} 卷数据失败，跳过该卷: {e}")
 
-                # 2. 旧版/传统 DOM 结构分卷解析兜底
                 if not volumes_data:
                     vol_elements = await page.query_selector_all(
                         ".catalog-volume, .volume-item, .volume-box, .volume-wrap, .volume-list, .volume, .catalog-section, .catalog-group, [class*='volume']"
@@ -561,7 +595,7 @@ async def crawl_lightnovel_to_epub(
                                 try:
                                     v_raw = await vol.inner_text(v_sel, timeout=800)
                                     if v_raw and v_raw.strip():
-                                        vol_title = convert_t2s(v_raw.strip(), to_simplified)
+                                        vol_title = v_raw.strip()
                                         break
                                 except Exception:
                                     continue
@@ -576,14 +610,13 @@ async def crawl_lightnovel_to_epub(
                                 if not href or ("reader" not in href and "chapter" not in href and "detail" not in href):
                                     continue
                                 raw_c_title = await c_link.inner_text()
-                                c_title = convert_t2s(raw_c_title.strip(), to_simplified) or "无标题章节"
+                                c_title = raw_c_title.strip() or "无标题章节"
                                 full_url = urljoin(DOMAIN, href)
                                 chapters.append({"title": c_title, "url": full_url})
 
                             if chapters:
                                 volumes_data.append({"vol_title": vol_title, "chapters": chapters})
 
-                # 3. 强效兜底逻辑：若仍未查找到分卷，全页抽取所有阅读链接归入默认卷
                 if not volumes_data:
                     print("  [!] 未检测到分卷容器，启用全页章节抽取兜底策略...")
                     all_ch_links = await page.query_selector_all(
@@ -600,40 +633,38 @@ async def crawl_lightnovel_to_epub(
                             continue
                         seen_urls.add(full_url)
                         raw_c_title = await c_link.inner_text()
-                        c_title = convert_t2s(raw_c_title.strip(), to_simplified) or f"章节 {len(chapters)+1}"
+                        c_title = raw_c_title.strip() or f"章节 {len(chapters)+1}"
                         chapters.append({"title": c_title, "url": full_url})
 
                     if chapters:
                         volumes_data.append({"vol_title": "正文卷", "chapters": chapters})
 
-                # 仅在确认分卷与章节列表全部爬取成功（非空且至少有一章）后才写入 catalog.json 缓存
                 if volumes_data and any(len(v.get("chapters", [])) > 0 for v in volumes_data):
                     save_catalog_cache(book_title, volumes_data)
                     print(f"[✓] 分卷及章节列表已完整获取，持久化缓存至: {get_catalog_cache_path(book_title)}")
 
         else:
-            # 本地纯缓存读取模式
             print("[+] 已开启纯缓存提取模式 (use_cache_only=True)...")
-            target_book_dir = None
-            for dname in os.listdir(CACHE_DIR):
-                dpath = os.path.join(CACHE_DIR, dname)
-                if os.path.isdir(dpath):
-                    meta_p = os.path.join(dpath, "metadata.json")
-                    if os.path.exists(meta_p):
-                        try:
-                            meta = json.load(open(meta_p, "r", encoding="utf-8"))
-                            if str(meta.get("book_id")) == str(book_id):
-                                target_book_dir = dpath
-                                book_title = meta.get("title", dname)
-                                author = meta.get("author", "未知")
-                                cover_url = meta.get("cover_url", "")
-                                break
-                        except Exception:
-                            pass
-
-            if not target_book_dir:
+            if os.path.exists(CACHE_DIR):
                 for dname in os.listdir(CACHE_DIR):
-                    if book_id in dname:
+                    dpath = os.path.join(CACHE_DIR, dname)
+                    if os.path.isdir(dpath):
+                        meta_p = os.path.join(dpath, "metadata.json")
+                        if os.path.exists(meta_p):
+                            try:
+                                meta = json.load(open(meta_p, "r", encoding="utf-8"))
+                                if str(meta.get("book_id")) == str(book_id):
+                                    target_book_dir = dpath
+                                    book_title = meta.get("title", dname)
+                                    author = meta.get("author", "未知")
+                                    cover_url = meta.get("cover_url", "")
+                                    break
+                            except Exception:
+                                pass
+
+            if not target_book_dir and os.path.exists(CACHE_DIR):
+                for dname in os.listdir(CACHE_DIR):
+                    if str(book_id) in dname:
                         target_book_dir = os.path.join(CACHE_DIR, dname)
                         book_title = dname
                         break
@@ -642,9 +673,17 @@ async def crawl_lightnovel_to_epub(
                 print(f"[!] 错误: 未能在本地缓存目录中找到 Book ID [{book_id}] 的缓存文件夹！")
                 return []
 
-            print(f"[✓] 已定位本地缓存路径: {target_book_dir}")
+            print(f"[✓] 已定位本地绝对缓存路径: {target_book_dir}")
 
-            cached_catalog = load_catalog_cache(book_title)
+            cat_p = os.path.join(target_book_dir, "catalog.json")
+            cached_catalog = []
+            if os.path.exists(cat_p):
+                try:
+                    with open(cat_p, "r", encoding="utf-8") as f:
+                        cached_catalog = json.load(f)
+                except Exception:
+                    cached_catalog = []
+
             if cached_catalog:
                 volumes_data = cached_catalog
                 print(f"[✓] 成功从 catalog.json 加载 {len(volumes_data)} 个分卷结构")
@@ -654,26 +693,40 @@ async def crawl_lightnovel_to_epub(
                     if os.path.isdir(vol_dpath) and vol_dname != "images_mapped":
                         vol_ch_list = []
                         for fname in sorted(os.listdir(vol_dpath)):
-                            if fname.endswith(".json"):
+                            if fname.endswith(".json") and fname not in ("metadata.json", "catalog.json"):
                                 ch_title = fname[:-5]
-                                vol_ch_list.append({"title": convert_t2s(ch_title, to_simplified), "url": ""})
+                                vol_ch_list.append({"title": ch_title, "url": ""})
                         if vol_ch_list:
-                            volumes_data.append({"vol_title": convert_t2s(vol_dname, to_simplified), "chapters": vol_ch_list})
+                            volumes_data.append({"vol_title": vol_dname, "chapters": vol_ch_list})
 
         downloaded_epubs = []
 
-        # 优先处理并缓存封面图到一级 images_mapped 目录
         cover_img_data = None
         cover_ext = ".jpg"
-        if cover_url:
-            root_img_dir = get_image_save_dir(book_title)
-            cover_hash = get_url_hash(cover_url)
+        if cover_url or use_cache_only:
+            candidate_cover_dirs = []
+            if target_book_dir:
+                candidate_cover_dirs.append(os.path.join(target_book_dir, "images_mapped"))
+            candidate_cover_dirs.append(get_image_save_dir(book_title))
 
+            cover_hash = get_url_hash(cover_url) if cover_url else None
             existing_cover_file = None
-            for ext in [".jpg", ".png", ".gif", ".webp"]:
-                test_cover_p = os.path.join(root_img_dir, f"cover_{cover_hash}{ext}")
-                if is_image_valid(test_cover_p):
-                    existing_cover_file = test_cover_p
+
+            for c_dir in candidate_cover_dirs:
+                if not c_dir or not os.path.exists(c_dir):
+                    continue
+                if cover_hash:
+                    for ext in [".jpg", ".png", ".gif", ".webp"]:
+                        test_p = os.path.join(c_dir, f"cover_{cover_hash}{ext}")
+                        if is_image_valid(test_p):
+                            existing_cover_file = test_p
+                            break
+                if not existing_cover_file:
+                    for fname in os.listdir(c_dir):
+                        if fname.startswith("cover_") and is_image_valid(os.path.join(c_dir, fname)):
+                            existing_cover_file = os.path.join(c_dir, fname)
+                            break
+                if existing_cover_file:
                     break
 
             if existing_cover_file:
@@ -681,58 +734,69 @@ async def crawl_lightnovel_to_epub(
                 with open(existing_cover_file, "rb") as f:
                     cover_img_data = f.read()
                 cover_ext = os.path.splitext(existing_cover_file)[1] or ".jpg"
-            else:
+            elif cover_url and not use_cache_only:
                 print(f"[+] 正在下载封面图片: {cover_url}")
                 c_data, c_ext = download_image(cover_url, headers, cookies_dict)
                 if c_data:
                     cover_img_data = c_data
                     cover_ext = c_ext or ".jpg"
                     local_cover_filename = f"cover_{cover_hash}{cover_ext}"
-                    local_cover_path = os.path.join(root_img_dir, local_cover_filename)
+                    local_cover_path = os.path.join(get_image_save_dir(book_title), local_cover_filename)
                     with open(local_cover_path, "wb") as f:
                         f.write(c_data)
                     print(f"  [✓] 封面图片已持久化缓存: {local_cover_filename}")
 
-        # 开始遍历各大分卷处理
         for v_idx, vol in enumerate(volumes_data):
-            vol_title = vol["vol_title"]
+            raw_vol_title = vol["vol_title"]
+            display_vol_title = convert_t2s(raw_vol_title, to_simplified)
+            display_book_title = convert_t2s(book_title, to_simplified)
+            display_author = convert_t2s(author, to_simplified)
+
             chapters = vol["chapters"]
-            print(f"\n======== 处理分卷 ({v_idx+1}/{len(volumes_data)}): {vol_title} ========")
+            print(f"\n======== 处理分卷 ({v_idx+1}/{len(volumes_data)}): {display_vol_title} ========")
 
             book = epub.EpubBook()
             book.set_identifier(f"lk-{book_id}-v{v_idx+1}")
-            book.set_title(f"{book_title} - {vol_title}")
+            book.set_title(f"{display_book_title} - {display_vol_title}")
             book.set_language("zh")
-            book.add_author(author)
+            book.add_author(display_author)
 
             if cover_img_data:
                 book.set_cover(f"cover{cover_ext}", cover_img_data)
 
             epub_chapters = []
-            vol_image_map = {}  # original_url_or_hash -> (local_filename, full_path)
+            vol_image_map = {}
 
             for c_idx, ch in enumerate(chapters):
-                ch_title = convert_t2s(ch["title"], to_simplified)
-                ch_url = ch["url"]
+                raw_ch_title = ch["title"]
+                display_ch_title = convert_t2s(raw_ch_title, to_simplified)
+                ch_url = ch.get("url", "")
 
-                cached_data = load_chapter_cache(book_title, vol_title, ch_title)
+                cached_data = load_chapter_cache(
+                    book_title, 
+                    display_ch_title, 
+                    display_ch_title, 
+                    target_book_dir=target_book_dir, 
+                    raw_vol_name=raw_vol_title, 
+                    raw_ch_title=raw_ch_title
+                )
                 ch_html_content = ""
                 images_info = []
 
                 if cached_data and "content" in cached_data:
-                    print(f"  [✓] 读入章节本地缓存 [{c_idx+1}/{len(chapters)}]: {ch_title}")
-                    ch_html_content = convert_t2s(cached_data["content"], to_simplified)
+                    print(f"  [✓] 读入章节本地缓存 [{c_idx+1}/{len(chapters)}]: {display_ch_title}")
+                    ch_html_content = cached_data["content"]
                     images_info = cached_data.get("images", [])
 
                     if not images_info:
                         found_srcs = re.findall(r'src=["\']([^"\']+)["\']', ch_html_content)
                         for src in found_srcs:
                             if "http" in src or "upload-files" in src:
-                                full_u = urljoin(DOMAIN, src)
+                                full_u = urljoin(DOMAIN, html.unescape(src))
                                 images_info.append({"url": full_u, "hash": get_url_hash(full_u)})
 
                 elif not use_cache_only:
-                    print(f"  [+] 抓取网页章节 [{c_idx+1}/{len(chapters)}]: {ch_title} ({ch_url})")
+                    print(f"  [+] 抓取网页章节 [{c_idx+1}/{len(chapters)}]: {display_ch_title} ({ch_url})")
                     await safe_goto(page, ch_url)
 
                     try:
@@ -755,38 +819,66 @@ async def crawl_lightnovel_to_epub(
 
                     if content_el:
                         raw_html = await content_el.inner_html()
-                        ch_html_content = convert_t2s(raw_html, to_simplified)
+                        ch_html_content = raw_html
 
                         img_els = await content_el.query_selector_all("img")
                         for img in img_els:
                             src = await img.get_attribute("src") or await img.get_attribute("data-src")
                             if src:
-                                full_img_url = urljoin(DOMAIN, src)
+                                full_img_url = urljoin(DOMAIN, html.unescape(src))
                                 img_hash = get_url_hash(full_img_url)
                                 images_info.append({"url": full_img_url, "hash": img_hash})
 
                         save_chapter_cache(
                             book_title,
-                            vol_title,
-                            ch_title,
-                            {"title": ch_title, "url": ch_url, "content": ch_html_content, "images": images_info},
+                            raw_vol_title,
+                            raw_ch_title,
+                            {"title": raw_ch_title, "url": ch_url, "content": ch_html_content, "images": images_info},
                         )
 
-                ch_img_dir = get_image_save_dir(book_title, vol_title)
+                candidate_img_dirs = []
+                ch_json_dir = cached_data.get("json_dir")
+                if ch_json_dir:
+                    candidate_img_dirs.append(os.path.join(ch_json_dir, "images_mapped"))
+                    candidate_img_dirs.append(os.path.join(ch_json_dir, sanitize_filename(raw_ch_title), "images_mapped"))
+                    candidate_img_dirs.append(os.path.join(ch_json_dir, sanitize_filename(display_ch_title), "images_mapped"))
+
+                if target_book_dir:
+                    candidate_img_dirs.append(os.path.join(target_book_dir, sanitize_filename(raw_vol_title), "images_mapped"))
+                    candidate_img_dirs.append(os.path.join(target_book_dir, sanitize_filename(display_vol_title), "images_mapped"))
+                    candidate_img_dirs.append(os.path.join(target_book_dir, "images_mapped"))
+                    for root_d, dirs_d, _ in os.walk(target_book_dir):
+                        if os.path.basename(root_d) == "images_mapped" and root_d not in candidate_img_dirs:
+                            candidate_img_dirs.append(root_d)
+                
+                candidate_img_dirs.append(get_image_save_dir(book_title, raw_vol_title))
+                candidate_img_dirs.append(get_image_save_dir(book_title))
+
+                chapter_images = []
+                seen_img_hashes = set()
 
                 for img_item in images_info:
                     img_url = img_item["url"]
                     img_hash = img_item["hash"]
 
                     local_img_name = None
-                    for ext in [".jpg", ".png", ".gif", ".webp"]:
-                        test_path = os.path.join(ch_img_dir, f"{img_hash}{ext}")
-                        if is_image_valid(test_path):
-                            local_img_name = f"{img_hash}{ext}"
+                    img_full_path = None
+
+                    for c_dir in candidate_img_dirs:
+                        if not c_dir or not os.path.exists(c_dir):
+                            continue
+                        for ext in [".jpg", ".png", ".gif", ".webp"]:
+                            test_path = os.path.join(c_dir, f"{img_hash}{ext}")
+                            if is_image_valid(test_path):
+                                local_img_name = f"{img_hash}{ext}"
+                                img_full_path = test_path
+                                break
+                        if local_img_name:
                             break
 
-                    if not local_img_name:
+                    if not local_img_name and not use_cache_only:
                         print(f"    [+] 补齐/重新下载图片 ({img_hash}): {img_url}")
+                        ch_img_dir = get_image_save_dir(book_title, raw_vol_title)
                         img_data, img_ext = download_image(img_url, headers, cookies_dict)
                         if img_data:
                             img_ext = img_ext or ".jpg"
@@ -794,33 +886,68 @@ async def crawl_lightnovel_to_epub(
                             save_p = os.path.join(ch_img_dir, local_img_name)
                             with open(save_p, "wb") as f:
                                 f.write(img_data)
+                            img_full_path = save_p
                         else:
                             print(f"    [!] 图片下载失败，跳过: {img_url}")
                             continue
 
-                    if local_img_name:
-                        img_full_path = os.path.join(ch_img_dir, local_img_name)
-                        if is_image_valid(img_full_path):
-                            vol_image_map[img_hash] = (local_img_name, img_full_path)
-                # 精准将 HTML 中的图片 src 路径替换为标准相对路径 images/hash.ext
+                    if local_img_name and img_full_path and is_image_valid(img_full_path):
+                        vol_image_map[img_hash] = (local_img_name, img_full_path)
+                        if img_hash not in seen_img_hashes:
+                            seen_img_hashes.add(img_hash)
+                            chapter_images.append((img_hash, local_img_name, img_full_path))
+
+                # 如果正文 JSON 没记录 images，直接扫描候选图片目录补齐
+                if not chapter_images:
+                    for c_dir in candidate_img_dirs:
+                        if c_dir and os.path.exists(c_dir):
+                            for fname in sorted(os.listdir(c_dir)):
+                                fpath = os.path.join(c_dir, fname)
+                                if is_image_valid(fpath):
+                                    f_hash = os.path.splitext(fname)[0]
+                                    if f_hash not in seen_img_hashes:
+                                        seen_img_hashes.add(f_hash)
+                                        chapter_images.append((f_hash, fname, fpath))
+                                        vol_image_map[f_hash] = (fname, fpath)
+
                 processed_html = ch_html_content
-                for img_hash, (img_filename, _) in vol_image_map.items():
-                    processed_html = re.sub(
-                        rf'src=["\'][^"\']*?{img_hash}[^"\']*?["\']',
-                        f'src="images/{img_filename}"',
-                        processed_html
+                found_srcs = re.findall(r'src=["\']([^"\']+)["\']', processed_html)
+                for src_val in set(found_srcs):
+                    full_u = urljoin(DOMAIN, html.unescape(src_val))
+                    u_hash = get_url_hash(full_u)
+                    if u_hash in vol_image_map:
+                        local_fname, _ = vol_image_map[u_hash]
+                        processed_html = processed_html.replace(src_val, f"images/{local_fname}")
+
+                # 仅在合成 EPUB 时临时对 HTML 内容及标题作繁转简处理
+                display_html = convert_t2s(processed_html, to_simplified)
+
+                # 仅在 use_cache_only=True + only_redownload_images=False 模式下在章节开头独立新建插图章节
+                if use_cache_only and not only_redownload_images and chapter_images:
+                    illus_ch_title = convert_t2s(f"插图:{raw_ch_title}", to_simplified)
+                    illus_item = epub.EpubHtml(
+                        title=illus_ch_title,
+                        file_name=f"chap_{c_idx+1}_illus.xhtml",
+                        lang="zh",
                     )
+                    illus_body = [f"<h2>{illus_ch_title}</h2>", '<div style="text-align: center;">']
+                    for _, img_fname, _ in chapter_images:
+                        illus_body.append(f'<p><img src="images/{img_fname}" style="max-width:100%;height:auto;" /></p>')
+                    illus_body.append("</div>")
+                    illus_item.content = "\n".join(illus_body)
+                    book.add_item(illus_item)
+                    epub_chapters.append(illus_item)
+                    print(f"    [+] [插图处理] 成功创建独立插图章节: 【{illus_ch_title}】 (包含 {len(chapter_images)} 张插图)")
 
                 c_item = epub.EpubHtml(
-                    title=convert_t2s(ch_title, to_simplified),
+                    title=display_ch_title,
                     file_name=f"chap_{c_idx+1}.xhtml",
                     lang="zh",
                 )
-                c_item.content = f"<h2>{convert_t2s(ch_title, to_simplified)}</h2>\n<div>{convert_t2s(processed_html, to_simplified)}</div>"
+                c_item.content = f"<h2>{display_ch_title}</h2>\n<div>{display_html}</div>"
                 book.add_item(c_item)
                 epub_chapters.append(c_item)
 
-            # 将分卷图片统一打包注入 EPUB
             for img_hash, (img_filename, img_full_path) in vol_image_map.items():
                 if not is_image_valid(img_full_path):
                     print(f"  [!] 文件损坏，跳过打包进 EPUB: {img_filename}")
@@ -848,6 +975,7 @@ async def crawl_lightnovel_to_epub(
                         content=i_data,
                     )
                     book.add_item(img_item)
+                    print(f"    [✓] 图片打包进 EPUB 资源库: images/{img_filename}")
                 except Exception as e:
                     print(f"  [!] 写入图片到 EPUB 失败 ({img_filename}): {e}")
 
@@ -858,8 +986,8 @@ async def crawl_lightnovel_to_epub(
             book.spine = ["nav"] + epub_chapters
 
             # 输出合成文件
-            safe_book_name = sanitize_filename(book_title)
-            safe_vol_name = sanitize_filename(vol_title)
+            safe_book_name = sanitize_filename(display_book_title)
+            safe_vol_name = sanitize_filename(display_vol_title)
             out_epub_name = f"{safe_book_name} - {safe_vol_name}.epub"
             out_epub_path = os.path.join(output_dir, out_epub_name)
 
@@ -877,11 +1005,10 @@ if __name__ == "__main__":
     bid = sys.argv[1] if len(sys.argv) > 1 else get_config("lk.default_book")
     asyncio.run(
         crawl_lightnovel_to_epub(
-            book_id=bid,
-            output_dir="./Novels/",
+            book_id=str(bid),
             headless=False,
             only_redownload_images=False,
             to_simplified=True,     # 默认开启繁转简
-            use_cache_only=False,   # 重新爬取开启（True 则直接读取现有缓存合成）
+            use_cache_only=True,   # 重新爬取开启（True 则直接读取现有缓存合成）
         )
     )
