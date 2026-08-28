@@ -12,12 +12,12 @@ from config import BotDataManager, zConfig
 PRESET_LOG_PATHS = zConfig.get_config("bot.opcmd.preset_log_paths", default=[])
 ALAS_ERROR_LOG_PATH = zConfig.get_config("bot.opcmd.alas_error_log_path")
 SENSITIVE_PATTERNS = zConfig.get_config("bot.opcmd.sensitive_patterns", default=[])
-MASK_REPLACEMENT = zConfig.get_config("bot.opcmd.mask_replacement", default=r"D:\***")
+MASK_REPLACEMENT = zConfig.get_config("bot.opcmd.mask_replacement")
 BEGINVBS = zConfig.get_config("bot.opcmd.beginvbs")
 
 # 动态配置 Node.js 路径及 Yunzai 目录
-NODEEXE = zConfig.get_config("bot.opcmd.node", default=r"C:\Program Files\nodejs\node.exe")
-YZDIR = zConfig.get_config("bot.opcmd.yzdir", default=r"D:\ZouNewFloder\Perseus\yunzai")
+NODEEXE = zConfig.get_config("bot.opcmd.node")
+YZDIR = zConfig.get_config("bot.opcmd.yzdir")
 
 # 内存中缓存日志查看状态与全局 PID 记录
 LOG_STATE_CACHE = {}

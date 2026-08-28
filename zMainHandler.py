@@ -165,7 +165,7 @@ def Handlepush(msg_dict: dict):
         body = msg_dict.get("body", "")
 
         # 格式化接收到的原始推送文本，供后续拼接到 body 中
-        raw_msg = f"\n[Original Push]\nTitle: {title}\nBody: {body}"
+        raw_msg = f"\n✳Original Push\n▶{title}\n▶{body}"
 
         print(f"\n[消息接收] 收到新推送通知 | 标题: 『{title}』")
 
@@ -303,7 +303,6 @@ def Handlepush(msg_dict: dict):
                         )
 
             else:
-                # 2. 判定是否为获得钻石/顶级奖励的通知
                 if "顶级奖励" in title or "钻石" in body:
                     print("Good News!💎红尖尖委托大成功！")
                     match = re.search(r"本次获得钻石\s*\*\s*(\d+)", body)
@@ -320,6 +319,98 @@ def Handlepush(msg_dict: dict):
                             "Gems Obtained!",
                             f"Gems commission successful!{raw_msg}",
                         )
+
+                # 2. 判定行动力数值变化通知
+                elif "行动力出现变化" in title or ("行动力" in title and ("下跌" in body or "上涨" in body)):
+                    print("[AP Update] 收到行动力变化通知")
+                    # 匹配格式: 总行动力: 1976 下跌79行动力 或 总行动力: 1369 上涨141行动力
+                    match = re.search(r"总行动力:\s*(\d+)\s*(上涨|下跌)\s*(\d+)行动力", body)
+                    if match:
+                        total_ap = match.group(1)
+                        direction = match.group(2)
+                        change_amount = match.group(3)
+                        symbol = "-" if direction == "下跌" else "+"
+                        
+                        notify_title = f"⚡ 行动力变化 ({symbol}{change_amount})"
+                        notify_body = f"当前总行动力: {total_ap} (较上次{direction} {change_amount} 行动力){raw_msg}"
+                        
+                        print(f" -> 解析成功: 总AP {total_ap}, {direction} {change_amount}")
+                        PerseusNotifyMsg(notify_title, notify_body)
+                    else:
+                        print(" -> 行动力变化未精确匹配，发送默认格式")
+                        PerseusNotifyMsg("⚡ 行动力出现变化", f"{body}{raw_msg}")
+
+                # 3. 判定行动力不足 / 低于最低保留通知
+                elif "行动力不足" in title or "低于最低保留" in title or "行动力不足" in body or "低于最低保留" in body:
+                    print("[AP Alert] 收到行动力不足/推迟任务通知")
+                    # 匹配格式: 总行动力 428 低于最低保留 500，推迟任务 / 已推迟任务
+                    match = re.search(r"总行动力\s*(\d+)\s*低于最低保留\s*(\d+)[，,]?\s*(.*)", body)
+                    if match:
+                        total_ap = match.group(1)
+                        min_reserve = match.group(2)
+                        action_taken = match.group(3).strip()
+                        
+                        notify_title = "⚠️ 行动力不足推送"
+                        notify_body = f"当前总行动力 ({total_ap}) 低于最低保留限额 ({min_reserve})。操作: {action_taken}。{raw_msg}"
+                        
+                        print(f" -> 解析成功: 当前AP={total_ap}, 保留上限={min_reserve}, 处置={action_taken}")
+                        PerseusNotifyMsg(notify_title, notify_body)
+                    else:
+                        print(" -> 低于保留值未精确匹配，发送默认通知")
+                        PerseusNotifyMsg("⚠️ 行动力低于最低保留", f"{body}{raw_msg}")
+
+                # 4. 判定舰船经验检测报告
+                elif "舰船经验检测报告" in title:
+                    print("[EXP Report] 收到舰船经验检测报告")
+                    fleet_match = re.search(r"检测舰队:\s*(.+)", body)
+                    unfilled_match = re.search(r"未满经验舰位:\s*(\d+)\s*艘", body)
+                    
+                    fleet_name = fleet_match.group(1).strip() if fleet_match else "未知舰队"
+                    unfilled_count = unfilled_match.group(1) if unfilled_match else "0"
+                    
+                    # 提取各个舰位未满船只的情况
+                    # 匹配格式: 舰位2: Lv.105 | 经验：100,145 | 进度：44.3% │ 预计时间：46小时18分钟
+                    ship_matches = re.findall(
+                        r"舰位(\d+):\s*(Lv\.\d+)\s*\|\s*经验：([^\|]+)\s*\|\s*进度：([^│\|]+)\s*│\s*预计时间：([^\n]+)",
+                        body
+                    )
+                    
+                    details = []
+                    for pos, lv, exp, progress, eta in ship_matches:
+                        progress_clean = progress.strip()
+                        if progress_clean != "已满":
+                            details.append(f"• 舰位{pos} ({lv}): 进度 {progress_clean} (预计剩余 {eta.strip()})")
+                    
+                    detail_text = "\n".join(details) if details else "全员经验已满"
+                    
+                    notify_title = f"📊 经验检测报告 ({fleet_name})"
+                    notify_body = f"未满经验舰位: {unfilled_count} 艘\n{detail_text}{raw_msg}"
+                    
+                    print(f" -> 解析成功: 舰队={fleet_name}, 未满={unfilled_count}艘")
+                    PerseusNotifyMsg(notify_title, notify_body)
+
+                # 5. 判定常规任务完成/成功（如月度Boss、重启设置等）
+                elif "成功" in title or "成功" in body:
+                    print("[Task Complete] 收到任务完成通知")
+                    has_warning = "有可恢复错误" in title or "有可恢复错误" in body
+                    
+                    # 尝试匹配任务名称: 任务 月度Boss ——成功
+                    task_match = re.search(r"任务\s*([^\s—–-]+)", body)
+                    if not task_match:
+                        task_match = re.search(r"<alas>\s*([^\s—–-]+)\s*成功", title)
+                        
+                    task_name = task_match.group(1).strip() if task_match else "自动化任务"
+                    
+                    status_str = "成功 (存在待关注的可恢复错误)" if has_warning else "顺利完成"
+                    icon = "⚠️" if has_warning else "✅"
+                    
+                    notify_title = f"{icon} 任务完成: {task_name}"
+                    notify_body = f"AzurPilot 执行 Task [{task_name}] 结果: {status_str}。{raw_msg}"
+                    
+                    print(f" -> 解析成功: 任务={task_name}, 存在警告={has_warning}")
+                    PerseusNotifyMsg(notify_title, notify_body)
+
+                # 6. 常规未特殊匹配消息，原样转发
                 else:
                     print("[日常通知] 常规推送消息，原样转发")
                     PerseusNotifyMsg(title, f"{body}{raw_msg}")
@@ -343,7 +434,7 @@ def Handlepush(msg_dict: dict):
         # 发送报错内容通知
         PerseusErrorMsg(
             f"Handlepush Script Error [{error_type}]",
-            f"Error processing push message: {error_detail}\n\n[Original Push]\nTitle: {msg_dict.get('title', '')}\nBody: {msg_dict.get('body', '')}",
+            f"⚠Error processing push message: {error_detail}\n\n[Original Push]\nTitle: {msg_dict.get('title', '')}\nBody: {msg_dict.get('body', '')}",
         )
         return False
 
