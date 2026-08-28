@@ -1,6 +1,6 @@
 # lajiovo-autotools 🐾
 
-`lajiovo-autotools` 是一个集成了自动化运维、远程控制、轻量工具箱与辅助自动化脚本的 Python/Playwright 工具库，由开发者与 AI 协作完成。适用于日常任务处理、模拟器看护、消息中转与智能推送等场景。
+`lajiovo-autotools` 是一个集成了自动化运维、远程控制、轻量工具箱与辅助自动化脚本的 Python 工具库，由开发者与 AI 协作完成。适用于日常任务处理、模拟器看护、消息中转与智能推送等场景。
 
 ---
 
@@ -113,6 +113,9 @@
 lajiovo-autotools/
 ├── QBot/                     # QBot 机器人独立服务目录
 │   ├── assets/               # 静态资源文件
+│   ├── temp_images/          # 云崽图片消息缓存
+│   ├── botdata/              # 机器人数据
+│   ├── log/                  # 机器人板块日志
 │   ├── config.py             # QBot 配置脚本
 │   ├── game.py               # 简易互动小游戏逻辑
 │   ├── gameconfig.json       # 游戏配置文件
@@ -121,7 +124,13 @@ lajiovo-autotools/
 │   ├── opcmd.py              # OP 指令集与富媒体卡片处理
 │   ├── server.py             # WebUI 及服务控制端
 │   ├── suoha.png             # 示例图片
+│   ├── botpy.log             # botpy的日志文件
 │   └── yz.py                 # 云崽 Bot接入
+├── cache/                    # zBrowser的文件
+├── browser_downloads/        # zBrowser的下载文件
+├── lkcache/                  # LK板块的缓存文件
+├── logs/                     # 大本营的日志文件
+├── temp_images/              # 乱飞的云崽图片消息缓存
 ├── quick_tools/              # 轻量化快捷小工具目录
 ├── webassets/                # Web 后台/控制面板前端静态资源
 ├── begin.vbs                 # 一级启动入口
@@ -150,7 +159,9 @@ lajiovo-autotools/
 ├── zPGRJZ.py                 # 苹果软件站签到等扩展自动化任务
 ├── zPerseusLogger.py         # 全局日志轮转与格式化处理
 ├── zPgrjzLogin.py            # 苹果软件站网页登录入口
-└── zPlaywright.py            # AzurpilotWebui 控制相关
+├── zPlaywright.py            # AzurpilotWebui 控制相关
+├── pgrjzauth.json            # 苹果软件站登入信息
+└── last_checkin.txt          # 签到日期记录
 
 ```
 
@@ -159,6 +170,8 @@ lajiovo-autotools/
 ## 📖 使用指南与注意事项
 
 > ⚠️ **免责声明与警告**：
+>
+
 > 1. **代码审计**：代码结构不算复杂，请在运行前仔细阅读源码逻辑并确认后台执行的具体任务。因使用本工具产生的任何潜在问题需自行承担责任。
 
 > 2. **已知风险**：虽然经过基础检查与测试，但受限于生成式 AI 的能力边界，代码中可能仍存在未发现的潜在 Bug，请谨慎部署与使用。
