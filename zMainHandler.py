@@ -7,6 +7,13 @@ import zPGRJZ
 import re
 from zBarkCustom import PerseusErrorMsg, PerseusWarningMsg,PerseusNotifyMsg
 
+def _md_original(title, body):
+    """将原始推送附为 Markdown 引用块。"""
+    title = title or ""
+    body = body or ""
+    return f"\n\n---\n**Original Push**\n- **Title:** {title}\n- **Body:**\n\n{body}"
+
+
 def run_alas_mumu_check():
     """
     通用检查与恢复函数
@@ -164,8 +171,7 @@ def Handlepush(msg_dict: dict):
         title = msg_dict.get("title", "")
         body = msg_dict.get("body", "")
 
-        # 格式化接收到的原始推送文本，供后续拼接到 body 中
-        raw_msg = f"\n✳Original Push\n▶{title}\n▶{body}"
+        raw_msg = _md_original(title, body)
 
         print(f"\n[消息接收] 收到新推送通知 | 标题: 『{title}』")
 
@@ -180,7 +186,7 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制: 自动重启流程（轻度异常）")
                     PerseusNotifyMsg(
                         "Auto-restart Triggered",
-                        f"AzurPilot is auto-restarting the game.{raw_msg}",
+                        f"**AzurPilot** is auto-restarting the game.{raw_msg}",
                     )
                     print("保险起见，确保隐藏窗口先")
                     if not zMumu.hidemumu():
@@ -199,7 +205,7 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制: 需要人工接管 (RequestHumanTakeover)")
                     PerseusWarningMsg(
                         "Human Takeover Requested",
-                        f"AzurPilot requested human takeover. Attempting auto-recovery...{raw_msg}",
+                        f"**AzurPilot** requested human takeover.\n\nAttempting auto-recovery...{raw_msg}",
                     )
 
                     print("[执行动作] 调用 Alas & MuMu 检查恢复流程...")
@@ -207,14 +213,14 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 修复失败，需人工干预")
                         PerseusErrorMsg(
                             "Recovery Failed",
-                            f"Auto-recovery failed. Manual intervention required.{raw_msg}",
+                            f"**Auto-recovery failed.** Manual intervention required.{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 清除障碍，运行恢复正常！")
                         PerseusNotifyMsg(
                             "Recovery Successful",
-                            f"AzurPilot issue resolved successfully.{raw_msg}",
+                            f"**AzurPilot** issue resolved successfully.{raw_msg}",
                         )
 
                 elif (
@@ -224,7 +230,7 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制: 模拟器未运行 (EmulatorNotRunningError)")
                     PerseusWarningMsg(
                         "Emulator Stopped",
-                        f"Emulator error detected. Restarting emulator and checking status...{raw_msg}",
+                        f"**Emulator error detected.** Restarting emulator and checking status...{raw_msg}",
                     )
 
                     print("[执行动作] 清理并重启隐藏 MuMu 模拟器...")
@@ -237,14 +243,14 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 模拟器拉起/修复失败")
                         PerseusErrorMsg(
                             "Emulator Recovery Failed",
-                            f"Failed to restart emulator. Manual intervention required.{raw_msg}",
+                            f"**Failed to restart emulator.** Manual intervention required.{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 模拟器已成功拉起并修复！")
                         PerseusNotifyMsg(
                             "Emulator Recovered",
-                            f"Emulator successfully restarted and running.{raw_msg}",
+                            f"**Emulator** successfully restarted and running.{raw_msg}",
                         )
                 elif (
                     "模拟器离线" in body
@@ -257,7 +263,7 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制:模拟器离线")
                     PerseusWarningMsg(
                         "Emulator offline",
-                        f"Emulator error detected. Restarting emulator and checking status...{raw_msg}",
+                        f"**Emulator error detected.** Restarting emulator and checking status...{raw_msg}",
                     )
 
                     print("[执行动作] 清理并重启隐藏 MuMu 模拟器...")
@@ -270,21 +276,21 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 模拟器拉起/修复失败")
                         PerseusErrorMsg(
                             "Emulator Recovery Failed",
-                            f"Failed to restart emulator. Manual intervention required.{raw_msg}",
+                            f"**Failed to restart emulator.** Manual intervention required.{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 模拟器已成功拉起并修复！")
                         PerseusNotifyMsg(
                             "Emulator Recovered",
-                            f"Emulator successfully restarted and running.{raw_msg}",
+                            f"**Emulator** successfully restarted and running.{raw_msg}",
                         )
 
                 else:
                     print(" -> 触发机制: 未知警告/错误")
                     PerseusWarningMsg(
                         "Unknown Error Detected",
-                        f"Unexpected error detected. Attempting auto-recovery...{raw_msg}",
+                        f"**Unexpected error detected.** Attempting auto-recovery...{raw_msg}",
                     )
 
                     print("[执行动作] 调用 Alas & MuMu 检查恢复流程...")
@@ -292,14 +298,14 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 未知错误修复失败")
                         PerseusErrorMsg(
                             "Recovery Failed",
-                            f"Failed to resolve unknown error. Please check system logs.{raw_msg}",
+                            f"**Failed to resolve unknown error.** Please check system logs.{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 异常已顺利排查！")
                         PerseusNotifyMsg(
                             "Recovery Successful",
-                            f"Unknown error resolved successfully.{raw_msg}",
+                            f"**Unknown error** resolved successfully.{raw_msg}",
                         )
 
             else:
@@ -311,13 +317,13 @@ def Handlepush(msg_dict: dict):
                         print(f" -> 解析成功: 获得钻石 * {diamond_count}")
                         PerseusNotifyMsg(
                             "Gems Obtained!",
-                            f"Gems commission successful! Obtained Gems x{diamond_count}.{raw_msg}",
+                            f"**Gems commission successful!** Obtained Gems x`{diamond_count}`.{raw_msg}",
                         )
                     else:
                         print(" -> 解析成功: 获得钻石奖励（未匹配到具体数值）")
                         PerseusNotifyMsg(
                             "Gems Obtained!",
-                            f"Gems commission successful!{raw_msg}",
+                            f"**Gems commission successful!**{raw_msg}",
                         )
 
                 # 2. 判定行动力数值变化通知
@@ -332,7 +338,7 @@ def Handlepush(msg_dict: dict):
                         symbol = "-" if direction == "下跌" else "+"
                         
                         notify_title = f"⚡ 行动力变化 ({symbol}{change_amount})"
-                        notify_body = f"当前总行动力: {total_ap} (较上次{direction} {change_amount} 行动力){raw_msg}"
+                        notify_body = f"**当前总行动力:** `{total_ap}`\n较上次{direction} `{change_amount}` 行动力{raw_msg}"
                         
                         print(f" -> 解析成功: 总AP {total_ap}, {direction} {change_amount}")
                         PerseusNotifyMsg(notify_title, notify_body)
@@ -351,7 +357,7 @@ def Handlepush(msg_dict: dict):
                         action_taken = match.group(3).strip()
                         
                         notify_title = "⚠️ 行动力不足推送"
-                        notify_body = f"当前总行动力 ({total_ap}) 低于最低保留限额 ({min_reserve})。操作: {action_taken}。{raw_msg}"
+                        notify_body = f"**当前总行动力** (`{total_ap}`) 低于最低保留限额 (`{min_reserve}`)。\n操作: {action_taken}{raw_msg}"
                         
                         print(f" -> 解析成功: 当前AP={total_ap}, 保留上限={min_reserve}, 处置={action_taken}")
                         PerseusNotifyMsg(notify_title, notify_body)
@@ -384,7 +390,7 @@ def Handlepush(msg_dict: dict):
                     detail_text = "\n".join(details) if details else "全员经验已满"
                     
                     notify_title = f"📊 经验检测报告 ({fleet_name})"
-                    notify_body = f"未满经验舰位: {unfilled_count} 艘\n{detail_text}{raw_msg}"
+                    notify_body = f"**未满经验舰位:** `{unfilled_count}` 艘\n{detail_text}{raw_msg}"
                     
                     print(f" -> 解析成功: 舰队={fleet_name}, 未满={unfilled_count}艘")
                     PerseusNotifyMsg(notify_title, notify_body)
@@ -405,7 +411,7 @@ def Handlepush(msg_dict: dict):
                     icon = "⚠️" if has_warning else "✅"
                     
                     notify_title = f"{icon} 任务完成: {task_name}"
-                    notify_body = f"AzurPilot 执行 Task [{task_name}] 结果: {status_str}。{raw_msg}"
+                    notify_body = f"AzurPilot 执行 Task **[{task_name}]** 结果: {status_str}。{raw_msg}"
                     
                     print(f" -> 解析成功: 任务={task_name}, 存在警告={has_warning}")
                     PerseusNotifyMsg(notify_title, notify_body)
@@ -434,7 +440,7 @@ def Handlepush(msg_dict: dict):
         # 发送报错内容通知
         PerseusErrorMsg(
             f"Handlepush Script Error [{error_type}]",
-            f"⚠Error processing push message: {error_detail}\n\n[Original Push]\nTitle: {msg_dict.get('title', '')}\nBody: {msg_dict.get('body', '')}",
+            f"**Error processing push message:** `{error_detail}`\n\n**Original Push**\n- **Title:** {msg_dict.get('title', '')}\n- **Body:** {msg_dict.get('body', '')}",
         )
         return False
 

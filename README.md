@@ -113,8 +113,19 @@
 lajiovo-autotools/
 ├── QBot/                     # QBot 机器人独立服务目录
 │   ├── assets/               # 静态资源文件
+│   │    ├── index.html       # 主页面
+│   │    ├── login.html
+│   │    └── chat.html
 │   ├── temp_images/          # 云崽图片消息缓存
 │   ├── botdata/              # 机器人数据
+│   │    ├── c2chistory/      # 私聊聊天记录
+│   │    ├── grouphistory/    # 群聊聊天记录
+│   │    ├── groupinfo/       # 群聊信息
+│   │    ├── userdata/        # 用户的游戏数据
+│   │    ├── userinfo/        # 用户信息
+│   │    ├── extra.json       # 其他信息
+│   │    ├── opsetting.json   # 管理员设置
+│   │    └── pushhistory.json # 已废弃
 │   ├── log/                  # 机器人板块日志
 │   ├── config.py             # QBot 配置脚本
 │   ├── game.py               # 简易互动小游戏逻辑
@@ -127,12 +138,19 @@ lajiovo-autotools/
 │   ├── botpy.log             # botpy的日志文件
 │   └── yz.py                 # 云崽 Bot接入
 ├── cache/                    # zBrowser的文件
+├── servercache/              # 大本营的缓存文件
 ├── browser_downloads/        # zBrowser的下载文件
 ├── lkcache/                  # LK板块的缓存文件
+│   └── <book-name>/          # 单书籍缓存
+│        ├── .../             # 分卷和分章节的文本与插图
+│        ├── images_mapped    # 封面
+│        └── metadata.json    # 书籍信息
 ├── logs/                     # 大本营的日志文件
 ├── temp_images/              # 乱飞的云崽图片消息缓存
 ├── quick_tools/              # 轻量化快捷小工具目录
 ├── webassets/                # Web 后台/控制面板前端静态资源
+│   ├── index.html            # 导航页
+│   └── dash.html             # 仪表盘 控制页
 ├── begin.vbs                 # 一级启动入口
 ├── Begin.example.bat         # 二级启动入口 示例
 ├── begin.pyw                 # 三级启动入口

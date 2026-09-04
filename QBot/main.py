@@ -532,21 +532,12 @@ class MyClient(botpy.Client):
 
         full_content = f"{msg_content}{warning_msg}"
 
-        # 4. 使用标准的 append_push_history 接口追加记录
-        self.data_mgr.append_push_history({
-            "target_group": effective_group_num,
-            "target_openid": target_openid,
-            "content": full_content,
-            "role": "push",
-        })
-
         try:
-            await self.api.post_group_message(
+            await self.send_group_markdown_by_content(
                 group_openid=target_openid,
-                msg_type=0,
                 content=full_content,
             )
-            logging.info(f"📢 [推送成功] OpenID: {target_openid}")
+            logging.info(f"📢 [Markdown 推送成功] OpenID: {target_openid}")
 
         except Exception as e:
             logging.error(f"❌ 推送消息被拒收/失败: {e}")

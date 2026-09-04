@@ -1,5 +1,7 @@
 import json
 import os
+import time
+import secrets
 import urllib.parse
 import threading
 import mimetypes
@@ -10,6 +12,19 @@ from config import _log
 
 # 读取同目录下 key.json 中的明文密码
 KEY_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "key.json")
+ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets"))
+SESSION_COOKIE = "qbot_session"
+SESSION_TTL = 7 * 24 * 3600
+_SESSIONS = {}
+_SESSIONS_LOCK = threading.Lock()
+
+PUBLIC_ASSET_FILES = {
+    "login.html",
+    "login.css",
+    "login.js",
+    "index.html",
+}
+
 
 def _get_stored_key():
     """从 key.json 中直接读取明文 key 字符串"""
@@ -31,6 +46,35 @@ def _get_stored_key():
 STORED_KEY = _get_stored_key()
 
 
+def _create_session():
+    token = secrets.token_urlsafe(32)
+    with _SESSIONS_LOCK:
+        _SESSIONS[token] = time.time() + SESSION_TTL
+    return token
+
+
+def _valid_session(token):
+    if not token:
+        return False
+    now = time.time()
+    with _SESSIONS_LOCK:
+        expire_at = _SESSIONS.get(token)
+        if expire_at is None:
+            return False
+        if now > expire_at:
+            _SESSIONS.pop(token, None)
+            return False
+        _SESSIONS[token] = now + SESSION_TTL
+        return True
+
+
+def _revoke_session(token):
+    if not token:
+        return
+    with _SESSIONS_LOCK:
+        _SESSIONS.pop(token, None)
+
+
 def start_http_servers(client_instance):
     """
     启动 25567 端口的 Web 控制台与 API 服务。
@@ -42,47 +86,151 @@ def start_http_servers(client_instance):
             # 禁用默认的标准 HTTP 日志输出，避免控制台刷屏
             pass
 
-        def _send_json(self, data, code=200):
+        def _send_json(self, data, code=200, extra_headers=None):
             """统一构建 JSON 格式响应，并添加防缓存 Header"""
             self.send_response(code)
             self.send_header("Content-type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
+            if extra_headers:
+                for k, v in extra_headers.items():
+                    self.send_header(k, v)
             self.end_headers()
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
 
+        def _redirect(self, location, extra_headers=None):
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            if extra_headers:
+                for k, v in extra_headers.items():
+                    self.send_header(k, v)
+            self.end_headers()
+
+        def _parse_cookies(self):
+            cookies = {}
+            raw = self.headers.get("Cookie") or ""
+            for part in raw.split(";"):
+                if "=" not in part:
+                    continue
+                k, v = part.split("=", 1)
+                cookies[k.strip()] = urllib.parse.unquote(v.strip())
+            return cookies
+
+        def _session_cookie_header(self, token, max_age=SESSION_TTL):
+            return f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={int(max_age)}"
+
+        def _clear_session_cookie_header(self):
+            return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+
+        def _get_session_token(self):
+            return self._parse_cookies().get(SESSION_COOKIE)
+
+        def _extract_provided_key(self, query_params=None, body_data=None):
+            header_key = self.headers.get("X-Api-Key") or self.headers.get("Authorization")
+            if header_key:
+                header_key = str(header_key).replace("Bearer", "").strip()
+            query_key = None
+            if query_params:
+                query_key = (query_params.get("key") or [None])[0]
+            body_key = None
+            if isinstance(body_data, dict):
+                body_key = body_data.get("key")
+            return header_key or query_key or body_key
+
+        def _is_password_match(self, input_key):
+            if not STORED_KEY or input_key is None:
+                return False
+            return str(input_key).strip() == STORED_KEY
+
         def _verify_auth(self, input_key=None):
-            """校验 API 访问凭证：比对传入明文与 key.json 中的明文密钥"""
+            """校验：有效登录会话，或明文密码（Header / query / body）"""
+            if _valid_session(self._get_session_token()):
+                return True
             if not STORED_KEY:
                 return False
-
             provided_key = self.headers.get("X-Api-Key") or input_key
             if not provided_key:
                 return False
-
             return str(provided_key).strip() == STORED_KEY
 
-        def _serve_static_file(self, relative_path):
-            """仅允许读取并返回 assets 目录下的静态资源文件 (HTML, CSS, JS 等)"""
+        def _read_json_body(self):
+            content_length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
+            if not raw:
+                return {}
+            try:
+                data = json.loads(raw)
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                try:
+                    parsed = urllib.parse.parse_qs(raw)
+                    return {k: v[0] if isinstance(v, list) and v else v for k, v in parsed.items()}
+                except Exception:
+                    return {}
+
+        def _collect_get_params(self):
+            raw_path = self.path
+            path_part, query_part = raw_path.split("?", 1) if "?" in raw_path else (raw_path, "")
+            query_params = urllib.parse.parse_qs(query_part.replace("?", "&"))
+            return path_part, query_params
+
+        def _dispatch_push(self, payload, query_params=None):
+            query_params = query_params or {}
+            markdown = (
+                (payload.get("markdown") if isinstance(payload, dict) else None)
+                or (payload.get("msg") if isinstance(payload, dict) else None)
+                or (payload.get("content") if isinstance(payload, dict) else None)
+                or (query_params.get("markdown") or [None])[0]
+                or (query_params.get("msg") or [None])[0]
+                or (query_params.get("content") or [None])[0]
+            )
+            if not markdown:
+                self._send_json({"status": "error", "message": "缺少 markdown / msg 参数"}, code=400)
+                return
+
+            group_val = None
+            if isinstance(payload, dict):
+                group_val = payload.get("group") or payload.get("target_group")
+            if not group_val:
+                group_list = query_params.get("group", [])
+                group_val = group_list[0] if group_list else None
+
+            if client_instance.bot_loop:
+                asyncio.run_coroutine_threadsafe(
+                    client_instance.push_message_to_group(str(markdown), group_val),
+                    client_instance.bot_loop
+                )
+            self._send_json({"status": "success", "message": "Markdown 推送任务已接收"})
+
+        def _asset_filename(self, relative_path):
             safe_path = os.path.normpath(relative_path).lstrip("/\\")
-            
-            # 如果访问路径是 bot/assets/xxx，剥离前面的 bot/ 得到 assets/xxx
             if safe_path.startswith("bot" + os.sep) or safe_path.startswith("bot/"):
                 safe_path = safe_path[4:].lstrip("/\\")
+            if safe_path.startswith("assets" + os.sep) or safe_path.startswith("assets/"):
+                safe_path = safe_path.split("assets", 1)[-1].lstrip("/\\")
+            return safe_path.replace("\\", "/")
 
-            if not safe_path.startswith("assets"):
+        def _serve_static_file(self, relative_path, require_auth=False):
+            """读取并返回 assets 目录下的静态资源文件"""
+            filename = self._asset_filename(relative_path)
+            if not filename or ".." in filename.split("/"):
                 self.send_response(403)
                 self.end_headers()
                 return
 
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.abspath(os.path.join(base_dir, safe_path))
-
-            assets_dir = os.path.abspath(os.path.join(base_dir, "assets"))
-            if not file_path.startswith(assets_dir) or not os.path.exists(file_path) or os.path.isdir(file_path):
+            file_path = os.path.abspath(os.path.join(ASSETS_DIR, filename))
+            if not file_path.startswith(ASSETS_DIR) or not os.path.exists(file_path) or os.path.isdir(file_path):
                 self.send_response(404)
                 self.end_headers()
+                return
+
+            if require_auth and not self._verify_auth():
+                if filename.endswith(".html"):
+                    self._redirect("/bot/assets/login.html")
+                    return
+                self._send_json({"status": "error", "message": "身份校验失败：请先登录"}, code=401)
                 return
 
             mime_type, _ = mimetypes.guess_type(file_path)
@@ -110,36 +258,46 @@ def start_http_servers(client_instance):
                 self.end_headers()
 
         def do_GET(self):
-            raw_path = self.path
-            path_part, query_part = raw_path.split("?", 1) if "?" in raw_path else (raw_path, "")
-            query_params = urllib.parse.parse_qs(query_part.replace("?", "&"))
+            path_part, query_params = self._collect_get_params()
 
-            # ---------------- 1. 静态资源路由 (无校验，绝对禁止缓存) ----------------
-            if path_part in ("/", "/index.html", "/bot", "/bot/", "/bot/index.html"):
-                return self._serve_static_file("assets/index.html")
-            
-            if path_part.startswith("/bot/assets/"):
-                return self._serve_static_file(path_part)
+            # ---------------- 1. 静态资源：登录页公开，聊天页需登录 ----------------
+            if path_part in ("/", "/index.html", "/bot", "/bot/", "/bot/index.html", "/bot/login", "/bot/login.html"):
+                return self._serve_static_file("login.html")
 
-            # ---------------- 2. /push 接口 (免密推送) ----------------
+            if path_part in ("/bot/chat", "/bot/chat.html", "/bot/assets/chat.html"):
+                return self._serve_static_file("chat.html", require_auth=True)
+
+            if path_part.startswith("/bot/assets/") or path_part.startswith("/assets/"):
+                filename = self._asset_filename(path_part)
+                need_auth = filename not in PUBLIC_ASSET_FILES and filename.endswith(".html")
+                return self._serve_static_file(filename, require_auth=need_auth)
+
+            # ---------------- 2. /push 接口 (免密 Markdown 推送) ----------------
             if path_part == "/push":
-                msg_list, group_list = query_params.get("msg", []), query_params.get("group", [])
-                if not msg_list:
-                    self._send_json({"status": "error", "message": "缺少 msg 参数"}, code=400)
-                    return
+                return self._dispatch_push({}, query_params)
 
-                msg_content = msg_list[0]
-                target_group_num = group_list[0] if group_list else None
-
-                if client_instance.bot_loop:
-                    asyncio.run_coroutine_threadsafe(
-                        client_instance.push_message_to_group(msg_content, target_group_num),
-                        client_instance.bot_loop
+            # ---------------- 登录 / 登出 ----------------
+            if path_part == "/bot/api/login":
+                provided = self._extract_provided_key(query_params=query_params)
+                if self._is_password_match(provided):
+                    token = _create_session()
+                    self._send_json(
+                        {"status": "success", "message": "登录成功"},
+                        extra_headers={"Set-Cookie": self._session_cookie_header(token)},
                     )
-                self._send_json({"status": "success", "message": "推送任务已接收"})
+                    return
+                self._send_json({"status": "error", "message": "身份校验失败：密码不正确"}, code=401)
                 return
 
-            # ---------------- 3. 需要明文密码校验的 GET 路由 ----------------
+            if path_part == "/bot/api/logout":
+                _revoke_session(self._get_session_token())
+                self._send_json(
+                    {"status": "success", "message": "已退出登录"},
+                    extra_headers={"Set-Cookie": self._clear_session_cookie_header()},
+                )
+                return
+
+            # ---------------- 3. 需要鉴权的 GET 路由 ----------------
             query_key = query_params.get("key", [None])[0]
             if not self._verify_auth(query_key):
                 self._send_json({"status": "error", "message": "身份校验失败：密码不正确或缺少 Auth Key"}, code=401)
@@ -189,8 +347,8 @@ def start_http_servers(client_instance):
             # 轮询检查是否有新消息
             if path_part == "/bot/api/check_new":
                 reset = query_params.get("reset", ["true"])[0].lower() == "true"
-                status_info = client_instance.data_mgr.check_has_new_message(reset=reset)
-                self._send_json({"status": "success", "data": status_info})
+                has_new = bool(client_instance.data_mgr.check_has_new_message(reset=reset))
+                self._send_json({"status": "success", "data": {"has_new": has_new}})
                 return
 
             # 读取系统完整 OP 配置
@@ -219,12 +377,6 @@ def start_http_servers(client_instance):
                 self._send_json({"status": "success", "data": group_info})
                 return
 
-            # 读取全量推送历史
-            if path_part == "/bot/api/push_history":
-                push_history = client_instance.data_mgr.get_pushhistory()
-                self._send_json({"status": "success", "data": push_history})
-                return
-
             # 读取自定义扩展数据
             if path_part == "/bot/api/extra":
                 key = query_params.get("key_name", [""])[0]
@@ -240,18 +392,37 @@ def start_http_servers(client_instance):
 
         def do_POST(self):
             raw_path = self.path
-            path_part = raw_path.split("?")[0]
+            path_part, query_part = raw_path.split("?", 1) if "?" in raw_path else (raw_path, "")
+            query_params = urllib.parse.parse_qs(query_part.replace("?", "&"))
+            data = self._read_json_body()
 
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else "{}"
-            
-            try:
-                data = json.loads(body)
-            except Exception:
-                data = {}
+            # ---------------- 免密 Markdown 推送 ----------------
+            if path_part == "/push":
+                return self._dispatch_push(data, query_params)
 
-            # ---------------- 需要明文密码校验的 POST 路由 ----------------
-            post_key = data.get("key")
+            # ---------------- 登录：校验 key.json 明文密码并写入会话 Cookie ----------------
+            if path_part == "/bot/api/login":
+                provided = self._extract_provided_key(query_params=query_params, body_data=data)
+                if self._is_password_match(provided):
+                    token = _create_session()
+                    self._send_json(
+                        {"status": "success", "message": "登录成功"},
+                        extra_headers={"Set-Cookie": self._session_cookie_header(token)},
+                    )
+                    return
+                self._send_json({"status": "error", "message": "身份校验失败：密码不正确"}, code=401)
+                return
+
+            if path_part == "/bot/api/logout":
+                _revoke_session(self._get_session_token())
+                self._send_json(
+                    {"status": "success", "message": "已退出登录"},
+                    extra_headers={"Set-Cookie": self._clear_session_cookie_header()},
+                )
+                return
+
+            # ---------------- 需要鉴权的 POST 路由 ----------------
+            post_key = data.get("key") or self._extract_provided_key(query_params=query_params, body_data=data)
             if not self._verify_auth(post_key):
                 self._send_json({"status": "error", "message": "身份校验失败：密码不正确或缺少 Auth Key"}, code=401)
                 return

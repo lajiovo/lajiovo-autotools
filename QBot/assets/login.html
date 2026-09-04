@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Bot 登录</title>
+    <link rel="stylesheet" href="/bot/assets/login.css">
+</head>
+<body>
+    <div id="loginCard" class="login-card">
+        <h2>系统鉴权登录</h2>
+        <p class="login-hint">请输入控制台密码</p>
+        <input type="password" id="authKeyInput" placeholder="请输入密码" autocomplete="off" onkeydown="if(event.keyCode===13){login();}">
+        <button id="loginBtn" onclick="login()">登录控制台</button>
+        <p id="loginError" class="login-error"></p>
+    </div>
+    <script src="/bot/assets/login.js"></script>
+</body>
+</html>

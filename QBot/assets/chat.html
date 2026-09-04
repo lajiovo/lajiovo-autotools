@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Bot 控制台</title>
+    <link rel="stylesheet" href="/bot/assets/chat.css">
+</head>
+<body>
+    <div id="mainContainer" class="container" style="display:flex;">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h3>会话列表</h3>
+                <button class="btn-secondary" onclick="fetchTargetLists()">刷新</button>
+            </div>
+            <div id="chatList" class="chat-list"></div>
+        </div>
+
+        <div class="main">
+            <div id="chatHeader" class="chat-header">
+                <div class="title-area">
+                    <button class="btn-secondary back-btn" onclick="backToList()">‹ 返回</button>
+                    <span id="chatTitle" class="chat-title-text">请选择会话</span>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-secondary" onclick="refreshCurrentChat()">刷新</button>
+                    <button class="btn-danger" onclick="clearAndExit()">退出</button>
+                </div>
+            </div>
+            <div id="messagesList" class="messages"></div>
+            <div class="input-area">
+                <textarea id="msgInput" placeholder="输入消息 (Enter 发送)..." autocomplete="off" onkeydown="if(event.keyCode===13&&!event.shiftKey){event.preventDefault();sendMsg();}"></textarea>
+                <button class="btn-primary" onclick="sendMsg()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="renameModal" class="modal-overlay">
+        <div class="modal">
+            <h4>修改显示昵称</h4>
+            <input type="text" id="renameInput" placeholder="输入新昵称" onkeydown="if(event.keyCode===13){submitRename();}">
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="closeRenameModal()">取消</button>
+                <button class="btn-primary" style="height: auto; padding: 8px 18px;" onclick="submitRename()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/bot/assets/chat.js"></script>
+</body>
+</html>

@@ -12,6 +12,7 @@ browser_downloads/
 yunzai/
 log/
 temp_images/
+servercache/
 
 # 2. 忽略特定扩展名的文件
 *.log

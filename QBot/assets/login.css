@@ -1,0 +1,40 @@
+:root {
+    --primary-color: #6366f1;
+    --primary-gradient: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+    --text-main: #0f172a;
+    --border-color: #e2e8f0;
+    --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+body {
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%);
+    height: 100vh; display: flex; justify-content: center; align-items: center; overflow: hidden;
+}
+
+.login-card {
+    background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(12px);
+    padding: 40px 32px; border-radius: 20px; box-shadow: var(--shadow-lg);
+    width: 90%; max-width: 380px; text-align: center;
+    animation: fadeInScale 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.login-card h2 { margin-bottom: 8px; color: var(--text-main); font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+.login-hint { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+.login-card input {
+    width: 100%; padding: 14px 16px; margin-bottom: 20px; border: 1.5px solid var(--border-color);
+    border-radius: 12px; outline: none; font-size: 14px; transition: all 0.25s ease;
+}
+.login-card input:focus { border-color: var(--primary-color); box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15); }
+.login-card button {
+    width: 100%; padding: 14px; background: var(--primary-gradient); color: white; border: none;
+    border-radius: 12px; cursor: pointer; font-size: 15px; font-weight: 700; transition: all 0.25s ease;
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+.login-card button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4); }
+.login-card button:disabled { opacity: 0.7; transform: none; cursor: not-allowed; }
+.login-error { min-height: 20px; margin-top: 14px; color: #dc2626; font-size: 13px; font-weight: 600; }
+
+@keyframes fadeInScale {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}

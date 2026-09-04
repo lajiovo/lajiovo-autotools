@@ -1,7 +1,7 @@
 """
 client.data_mgr 数据读取与保存使用指南
 
-client.data_mgr 是统一数据管理对象（BotDataManager 实例），负责系统配置、用户信息、群聊配置、消息历史、推送记录及扩展数据的本地持久化与读取。
+client.data_mgr 是统一数据管理对象（BotDataManager 实例），负责系统配置、用户信息、群聊配置、消息历史及扩展数据的本地持久化与读取。
 
 一、 系统配置与 OP 权限 (opsetting)
 
@@ -259,39 +259,7 @@ is_group (bool, 可选): True 读取群聊历史，False 读取私聊历史，�
 
 返回值：list[dict]
 
-五、 推送历史 (pushhistory)
-
-保存至 botdata/pushhistory.json。
-
-1. 追加推送记录 append_push_history(content)
-
-说明：写入一条推送日志，系统会自动注入 timestamp 字段并自动落盘。
-
-参数：
-
-content (str | dict): 可以直接传入字符串内容，也可以传入字典对象。
-
-返回值：dict - 补全 timestamp 后的最终入库对象。
-
-2. 读取推送历史 get_pushhistory()
-
-说明：获取全量推送历史。
-
-参数：无
-
-返回值：list 或 dict（取决于存入的历史数据结构）。
-
-3. 覆盖/重置推送历史 save_pushhistory(push_data)
-
-说明：用新的数据替换现有推送历史并落盘。
-
-参数：
-
-push_data (list | dict): 全量推送历史数据。
-
-返回值：无
-
-六、 自定义扩展数据 (extra)
+五、 自定义扩展数据 (extra)
 
 保存至 botdata/extra.json，用于存储不属于用户信息或群信息的临时/自定义键值数据。
 
@@ -319,7 +287,7 @@ default (Any, 可选): 当键不存在时的默认返回值，默认为 None。
 
 返回值：Any
 
-七、 辅助与列表查询接口
+六、 辅助与列表查询接口
 
 1. 获取昵称 get_nickname(target_id, is_group=False)
 
@@ -474,10 +442,9 @@ def apply_sdk_patch():
 class BotDataManager:
     """
     统一数据管理对象
-    - opsetting, pushhistory, extra 按独立文件保存
+    - opsetting, extra 按独立文件保存
     - userinfo, userdata, groupinfo 按 ID 分文件存储至独立文件夹
     - grouphistory, c2chistory 按照群 ID 和人 ID 分文件单独存储
-    - pushhistory 写入仅需传入内容，自动补充 timestamp 字段
     """
     DEFAULT_OP = zConfig.get_config("bot.default_op")
 
@@ -497,7 +464,6 @@ class BotDataManager:
         self.groupinfo = {}     # group_id -> dict
         self.grouphistory = {}  # group_id -> list of msgs
         self.c2chistory = {}     # user_id -> list of msgs
-        self.pushhistory = []   # 推送历史列表
         self.extra = {}         # 自定义扩展数据
 
         self.load_all()
@@ -527,7 +493,6 @@ class BotDataManager:
                 os.path.join(self.data_dir, "opsetting.json"), 
                 {"op_list": [str(self.DEFAULT_OP)] if self.DEFAULT_OP else [], "system_active": True}
             )
-            self.pushhistory = self._read_json(os.path.join(self.data_dir, "pushhistory.json"), [])
             self.extra = self._read_json(os.path.join(self.data_dir, "extra.json"), {})
 
             # 确保默认 OP 权限存在
@@ -852,44 +817,6 @@ class BotDataManager:
             if reset:
                 self.has_new_msg = False
             return flag
-
-    def append_push_history(self, content):
-        """
-        写入推送历史，仅需要传入消息内容 (str 或 dict)，自动补充 timestamp 字段
-        """
-        now_time = datetime.now().isoformat()
-        with self._lock:
-            if isinstance(content, dict):
-                entry = dict(content)
-                if "timestamp" not in entry:
-                    entry["timestamp"] = now_time
-            else:
-                entry = {
-                    "content": str(content),
-                    "timestamp": now_time
-                }
-
-            if isinstance(self.pushhistory, list):
-                self.pushhistory.append(entry)
-            elif isinstance(self.pushhistory, dict):
-                p_id = f"push_{int(time.time() * 1000)}"
-                self.pushhistory[p_id] = entry
-            else:
-                self.pushhistory = [entry]
-
-            self._write_json(os.path.join(self.data_dir, "pushhistory.json"), self.pushhistory)
-            return entry
-
-    def save_pushhistory(self, push_data):
-        """直接保存/替换推送历史数据"""
-        with self._lock:
-            self.pushhistory = push_data
-            self._write_json(os.path.join(self.data_dir, "pushhistory.json"), self.pushhistory)
-
-    def get_pushhistory(self):
-        """获取推送历史记录"""
-        with self._lock:
-            return self.pushhistory
 
     def set_extra_data(self, key: str, value):
         """自定义扩展数据读写"""

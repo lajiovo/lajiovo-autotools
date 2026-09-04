@@ -579,6 +579,116 @@ def format_response(result_data, status_code=200):
         body = str(result_data)
     return body, status_code, {"Content-Type": "application/json"}
 
+# ==================== Push 日志缓存（三级 + 自动轮转） ====================
+
+PUSHLOG_LEVELS = ("notify", "warning", "error")
+PUSHLOG_MAX_RECORDS = 100
+PUSHLOG_DIR = os.path.join(BASE_DIR, "servercache", "pushlog")
+pushlog_lock = threading.Lock()
+
+
+def _collect_request_dict():
+    msg_dict = {}
+    msg_dict.update(request.args.to_dict())
+    msg_dict.update(request.form.to_dict())
+    if request.is_json:
+        json_data = request.get_json(silent=True)
+        if json_data and isinstance(json_data, dict):
+            msg_dict.update(json_data)
+    return msg_dict
+
+
+def _normalize_pushlog_level(level):
+    if not level:
+        return None
+    name = str(level).strip().lower()
+    aliases = {"notice": "notify", "warn": "warning", "err": "error"}
+    name = aliases.get(name, name)
+    return name if name in PUSHLOG_LEVELS else None
+
+
+def _pushlog_file(level):
+    return os.path.join(PUSHLOG_DIR, level, "records.json")
+
+
+def _read_pushlog(level):
+    path = _pushlog_file(level)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _write_pushlog(level, records):
+    folder = os.path.join(PUSHLOG_DIR, level)
+    os.makedirs(folder, exist_ok=True)
+    path = _pushlog_file(level)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+
+
+def append_pushlog(level, title, markdown, extra=None):
+    """追加一条推送记录并按上限自动轮转（丢弃最旧记录）。"""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = {
+        "time": now,
+        "title": title or "",
+        "markdown": markdown or "",
+        "content": markdown or "",
+    }
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if k not in entry:
+                entry[k] = v
+
+    with pushlog_lock:
+        records = _read_pushlog(level)
+        records.append(entry)
+        if len(records) > PUSHLOG_MAX_RECORDS:
+            records = records[-PUSHLOG_MAX_RECORDS:]
+        _write_pushlog(level, records)
+        total = len(records)
+    return entry, total
+
+
+def slice_pushlog(level, start_idx, end_idx):
+    """按从新到旧的 1-based 区间读取记录。"""
+    with pushlog_lock:
+        records = list(_read_pushlog(level))
+    newest_first = list(reversed(records))
+    total = len(newest_first)
+    if total == 0:
+        return [], 0, start_idx, end_idx
+    if start_idx < 1:
+        start_idx = 1
+    if end_idx < start_idx:
+        end_idx = start_idx
+    if start_idx > total:
+        return [], total, start_idx, end_idx
+    if end_idx > total:
+        end_idx = total
+    return newest_first[start_idx - 1 : end_idx], total, start_idx, end_idx
+
+
+def parse_pushlog_span(span):
+    """解析 xx 或 xx-xx 区间。"""
+    text = str(span or "").strip()
+    if not text:
+        return 1, 1
+    if "-" in text:
+        left, right = text.split("-", 1)
+        if left.strip().isdigit() and right.strip().isdigit():
+            return int(left.strip()), int(right.strip())
+        return None, None
+    if text.isdigit():
+        n = int(text)
+        return n, n
+    return None, None
+
 # 推送接收接口
 @app.route("/push", methods=["GET", "POST"])
 def receive_push():
@@ -703,6 +813,67 @@ def handle_bot_shutdown():
         }, 500)
 
 # ==================== Web 帮助与运行路由 ====================
+
+@app.route("/pushlog/add", methods=["GET", "POST"])
+def handle_pushlog_add():
+    """接收推送记录并按 notify/warning/error 三级写入 servercache/pushlog。"""
+    req_data = _collect_request_dict()
+    level = _normalize_pushlog_level(req_data.get("level") or req_data.get("type") or "notify")
+    if not level:
+        return format_response({"status": "error", "message": "level 必须为 notify/warning/error"}, 400)
+
+    title = req_data.get("title", "")
+    markdown = req_data.get("markdown") or req_data.get("msg") or req_data.get("content") or req_data.get("body") or ""
+    extra = {k: v for k, v in req_data.items() if k not in ("level", "type", "title", "markdown", "msg", "content", "body")}
+    entry, total = append_pushlog(level, str(title), str(markdown), extra)
+    return format_response({
+        "status": "ok",
+        "message": "pushlog 已写入",
+        "level": level,
+        "total": total,
+        "data": entry,
+    }, 200)
+
+
+@app.route("/pushlog/get/<level>/<span>", methods=["GET", "POST"])
+def handle_pushlog_get(level, span):
+    """读取记录：/pushlog/get/<notify,warning,error>/xx-xx （从新到旧，1-based）。"""
+    norm_level = _normalize_pushlog_level(level)
+    if not norm_level:
+        return format_response({"status": "error", "message": "level 必须为 notify/warning/error"}, 400)
+
+    start_idx, end_idx = parse_pushlog_span(span)
+    if start_idx is None:
+        return format_response({"status": "error", "message": "区间格式无效，应为 xx 或 xx-xx"}, 400)
+
+    items, total, start_idx, end_idx = slice_pushlog(norm_level, start_idx, end_idx)
+    if total == 0:
+        return format_response({
+            "status": "ok",
+            "level": norm_level,
+            "total": 0,
+            "start": start_idx,
+            "end": end_idx,
+            "data": [],
+            "message": "暂无记录",
+        }, 200)
+    if start_idx > total:
+        return format_response({
+            "status": "error",
+            "level": norm_level,
+            "total": total,
+            "message": f"序号超出范围 (共 {total} 条)",
+        }, 400)
+
+    return format_response({
+        "status": "ok",
+        "level": norm_level,
+        "total": total,
+        "start": start_idx,
+        "end": end_idx,
+        "data": items,
+    }, 200)
+
 
 @app.route("/ping", methods=["GET", "POST"])
 def handle_ping():

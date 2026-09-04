@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import time
 import subprocess
 import urllib.parse
@@ -765,10 +766,11 @@ async def handle_op_command(
     elif sub_cmd == "push":
         push_args = args[1:]
         if not push_args:
-            content = "📬 **【Push 推送选择】**\n请选择读取历史的范围："
+            content = "📬 **【Push 推送选择】**\n请选择级别与读取范围："
             kb = [
-                [("📩最新", "#op push get 1"), ("📩前二", "#op push get 1-2"), ("📩前三", "#op push get 1-3")],
-                [("📩四五", "#op push get 4-5"), ("📩六七", "#op push get 6-7")],
+                [("📢通知", "#op push get notify 1-3"), ("⚠️警告", "#op push get warning 1-3"), ("❌错误", "#op push get error 1-3")],
+                [("📩最新", "#op push get notify 1"), ("📩前二", "#op push get notify 1-2"), ("📩前三", "#op push get notify 1-3")],
+                [("📩四五", "#op push get notify 4-5"), ("📩六七", "#op push get notify 6-7")],
             ]
             return _format_msg_type_2(content, kb)
 
@@ -790,59 +792,86 @@ async def handle_op_command(
             return _format_msg_type_2("🛑 已关闭 Push 转发！")
 
         elif p_action == "get":
-            raw_push_history = client.data_mgr.get_pushhistory()
-            if isinstance(raw_push_history, dict):
-                push_history = raw_push_history.get("history", raw_push_history.get("push", []))
-            elif isinstance(raw_push_history, list):
-                push_history = raw_push_history
-            else:
-                push_history = []
+            PUSH_LEVELS = ("notify", "warning", "error")
+            level = "notify"
+            range_token = None
+            extra_args = push_args[1:]
 
-            if not push_history:
-                return _format_msg_type_2("📭 暂无 Push 历史记录。")
+            if extra_args:
+                first = extra_args[0].lower()
+                aliases = {"notice": "notify", "warn": "warning", "err": "error"}
+                first = aliases.get(first, first)
+                if first in PUSH_LEVELS:
+                    level = first
+                    if len(extra_args) > 1:
+                        range_token = extra_args[1]
+                else:
+                    range_token = extra_args[0]
 
-            reversed_history = list(reversed(push_history))
-            total = len(reversed_history)
-
-            start_idx = 1
-            end_idx = 1
-
-            if len(push_args) > 1:
-                param = push_args[1]
-                if "-" in param:
-                    parts = param.split("-")
+            start_idx, end_idx = 1, 1
+            if range_token:
+                if "-" in range_token:
+                    parts = range_token.split("-")
                     if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
                         start_idx = int(parts[0])
                         end_idx = int(parts[1])
-                elif param.isdigit():
-                    num = int(param)
-                    start_idx = num
-                    end_idx = num
+                elif range_token.isdigit():
+                    start_idx = end_idx = int(range_token)
 
             if start_idx < 1:
                 start_idx = 1
             if end_idx < start_idx:
                 end_idx = start_idx
-            if start_idx > total:
-                return _format_msg_type_2(f"⚠️ 序号超出范围 (共 {total} 条)")
-            if end_idx > total:
-                end_idx = total
 
-            selected_items = reversed_history[start_idx - 1 : end_idx]
-            res_lines = [f"📬 **Push 历史** ({start_idx}-{end_idx} / 共 {total} 条)\n"]
-            for idx, item in enumerate(selected_items, start=start_idx):
-                time_str = item.get("time", "未知时间") if isinstance(item, dict) else "未知时间"
-                msg_content = item.get("content", str(item)) if isinstance(item, dict) else str(item)
-                res_lines.append(f"📌 [#{idx}] `{time_str}`\n{msg_content}")
+            target_port = client.data_mgr.get_extra_data("target_port", 25566)
+            url = f"http://127.0.0.1:{target_port}/pushlog/get/{level}/{start_idx}-{end_idx}"
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                raw = urllib.request.urlopen(req, timeout=3).read().decode("utf-8")
+                payload = json.loads(raw)
+            except Exception as e:
+                return _format_msg_type_2(f"❌ 读取 25566 Push 日志失败: `{e}`")
 
-            kb = []
+            if payload.get("status") not in ("ok", "success"):
+                return _format_msg_type_2(f"⚠️ {payload.get('message', '读取失败')}")
+
+            push_history = payload.get("data") or []
+            total = int(payload.get("total") or 0)
+            start_idx = int(payload.get("start") or start_idx)
+            end_idx = int(payload.get("end") or end_idx)
+
+            if not push_history:
+                return _format_msg_type_2(f"📭 暂无 `{level}` Push 历史记录。")
+
+            res_lines = [f"📬 **Push 历史 [{level}]** ({start_idx}-{end_idx} / 共 {total} 条)\n"]
+            for idx, item in enumerate(push_history, start=start_idx):
+                if isinstance(item, dict):
+                    time_str = item.get("time") or item.get("timestamp") or "未知时间"
+                    msg_content = item.get("markdown") or item.get("content") or item.get("title") or str(item)
+                    title = item.get("title") or ""
+                else:
+                    time_str = "未知时间"
+                    msg_content = str(item)
+                    title = ""
+                head = f"📌 [#{idx}] `{time_str}`"
+                if title:
+                    head += f" **{title}**"
+                res_lines.append(f"{head}\n{msg_content}")
+
+            kb = [
+                [
+                    ("📢通知", f"#op push get notify {start_idx}-{end_idx}"),
+                    ("⚠️警告", f"#op push get warning {start_idx}-{end_idx}"),
+                    ("❌错误", f"#op push get error {start_idx}-{end_idx}"),
+                ]
+            ]
             row_nav = []
             if start_idx > 1:
                 prev_target = max(1, start_idx - 1)
-                row_nav.append(("⬅️上一条", f"#op push get {prev_target}"))
+                row_nav.append(("⬅️上一条", f"#op push get {level} {prev_target}"))
             if end_idx < total:
                 next_target = end_idx + 1
-                row_nav.append(("➡️下一条", f"#op push get {next_target}"))
+                row_nav.append(("➡️下一条", f"#op push get {level} {next_target}"))
             if row_nav:
                 kb.append(row_nav)
 
