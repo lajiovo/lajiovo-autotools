@@ -16,6 +16,7 @@ temp_images/
 # 2. 忽略特定扩展名的文件
 *.log
 *.epub
+*.log.*
 
 # 3. 忽略特定文件
 last_checkin.txt
