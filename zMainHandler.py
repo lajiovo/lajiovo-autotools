@@ -8,10 +8,11 @@ import re
 from zBarkCustom import PerseusErrorMsg, PerseusWarningMsg,PerseusNotifyMsg
 
 def _md_original(title, body):
-    """将原始推送附为 Markdown 引用块。"""
+    """将原始推送附为 Markdown 代码块。"""
     title = title or ""
     body = body or ""
-    return f"\n\n---\n**Original Push**\n- **Title:** {title}\n- **Body:**\n\n{body}"
+    raw_text = f"Title: {title}\nBody: {body}" if title and body else (title or body)
+    return f"\n\n```text\n{raw_text}\n```"
 
 
 def run_alas_mumu_check():
@@ -46,9 +47,10 @@ def run_alas_mumu_check():
         ):
             err_title = "Alas/MuMu 自动恢复失败"
             err_body = (
-                f"重启次数达到上限 (Alas软重启: {alas_soft_restart_count}/{max_soft_restarts}, "
-                f"Alas硬重启: {alas_hard_restart_count}/{max_hard_restarts}, "
-                f"MuMu重启: {mumu_restart_count}/{max_mumu_restarts})，已停止重试并清除进程。"
+                f"❌ **[严重错误]** 重启次数达到上限，已停止重试并清除进程。\n\n"
+                f"- **Alas软重启:** `{alas_soft_restart_count}/{max_soft_restarts}`\n"
+                f"- **Alas硬重启:** `{alas_hard_restart_count}/{max_hard_restarts}`\n"
+                f"- **MuMu重启:** `{mumu_restart_count}/{max_mumu_restarts}`"
             )
             print(f"[Fatal] {err_title}: {err_body}")
             PerseusErrorMsg(err_title, err_body)
@@ -150,7 +152,7 @@ def run_alas_mumu_check():
         except Exception as e:
             error_details = traceback.format_exc()
             print(f"[Error] 执行检查逻辑时发生未知异常: {e}\n{error_details}")
-            PerseusErrorMsg("检查脚本运行异常", f"执行过程发生未捕获异常: {e}")
+            PerseusErrorMsg("检查脚本运行异常", f"❌ **[运行异常]** 执行过程中发生未捕获异常：\n> `{e}`")
 
             # 遇到严重异常时进行 Alas 重启尝试恢复
             if alas_soft_restart_count < max_soft_restarts:
@@ -186,15 +188,15 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制: 自动重启流程（轻度异常）")
                     PerseusNotifyMsg(
                         "Auto-restart Triggered",
-                        f"**AzurPilot** is auto-restarting the game.{raw_msg}",
+                        f"🔄 **[自动重启]** **AzurPilot** 正在自动重启游戏...\n\n{raw_msg}",
                     )
                     print("保险起见，确保隐藏窗口先")
                     if not zMumu.hidemumu():
                         print("wtf,这也报错，为什么隐藏失败")
                         PerseusWarningMsg(
-                        "Failed to hide mumu window",
-                        f"Maybe sth wrong.{raw_msg}",
-                    )
+                            "Failed to hide mumu window",
+                            f"⚠️ **[隐藏失败]** 尝试隐藏 MuMu 窗口失败，请检查模拟器状态。\n\n{raw_msg}",
+                        )
                     else:
                         print("已确保窗口无问题")
 
@@ -205,7 +207,7 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制: 需要人工接管 (RequestHumanTakeover)")
                     PerseusWarningMsg(
                         "Human Takeover Requested",
-                        f"**AzurPilot** requested human takeover.\n\nAttempting auto-recovery...{raw_msg}",
+                        f"⚠️ **[接管请求]** AzurPilot 请求人工干预。\n\n> 🔄 **正在尝试自动恢复流程...**\n\n{raw_msg}",
                     )
 
                     print("[执行动作] 调用 Alas & MuMu 检查恢复流程...")
@@ -213,14 +215,14 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 修复失败，需人工干预")
                         PerseusErrorMsg(
                             "Recovery Failed",
-                            f"**Auto-recovery failed.** Manual intervention required.{raw_msg}",
+                            f"❌ **[恢复失败]** 自动恢复流程已结束，但未能解决问题，需人工干预！\n\n{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 清除障碍，运行恢复正常！")
                         PerseusNotifyMsg(
                             "Recovery Successful",
-                            f"**AzurPilot** issue resolved successfully.{raw_msg}",
+                            f"✅ **[恢复成功]** AzurPilot 问题已成功解决，恢复正常运行。\n\n{raw_msg}",
                         )
 
                 elif (
@@ -230,7 +232,7 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制: 模拟器未运行 (EmulatorNotRunningError)")
                     PerseusWarningMsg(
                         "Emulator Stopped",
-                        f"**Emulator error detected.** Restarting emulator and checking status...{raw_msg}",
+                        f"⚠️ **[模拟器异常]** 检测到模拟器停止运行，正在尝试重启并检查状态...\n\n{raw_msg}",
                     )
 
                     print("[执行动作] 清理并重启隐藏 MuMu 模拟器...")
@@ -243,14 +245,14 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 模拟器拉起/修复失败")
                         PerseusErrorMsg(
                             "Emulator Recovery Failed",
-                            f"**Failed to restart emulator.** Manual intervention required.{raw_msg}",
+                            f"❌ **[恢复失败]** 模拟器自动拉起/修复失败，需人工干预。\n\n{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 模拟器已成功拉起并修复！")
                         PerseusNotifyMsg(
                             "Emulator Recovered",
-                            f"**Emulator** successfully restarted and running.{raw_msg}",
+                            f"✅ **[模拟器恢复]** **Emulator** 已经成功重启并恢复运行。\n\n{raw_msg}",
                         )
                 elif (
                     "模拟器离线" in body
@@ -263,7 +265,7 @@ def Handlepush(msg_dict: dict):
                     print(" -> 触发机制:模拟器离线")
                     PerseusWarningMsg(
                         "Emulator offline",
-                        f"**Emulator error detected.** Restarting emulator and checking status...{raw_msg}",
+                        f"⚠️ **[模拟器离线]** 检测到模拟器已离线，正在重新拉起...\n\n{raw_msg}",
                     )
 
                     print("[执行动作] 清理并重启隐藏 MuMu 模拟器...")
@@ -276,21 +278,21 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 模拟器拉起/修复失败")
                         PerseusErrorMsg(
                             "Emulator Recovery Failed",
-                            f"**Failed to restart emulator.** Manual intervention required.{raw_msg}",
+                            f"❌ **[恢复失败]** 模拟器自动拉起/修复失败，需人工干预。\n\n{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 模拟器已成功拉起并修复！")
                         PerseusNotifyMsg(
                             "Emulator Recovered",
-                            f"**Emulator** successfully restarted and running.{raw_msg}",
+                            f"✅ **[模拟器恢复]** **Emulator** 已经成功重启并恢复运行。\n\n{raw_msg}",
                         )
 
                 else:
                     print(" -> 触发机制: 未知警告/错误")
                     PerseusWarningMsg(
                         "Unknown Error Detected",
-                        f"**Unexpected error detected.** Attempting auto-recovery...{raw_msg}",
+                        f"⚠️ **[未知异常]** 检测到非预期错误，正在尝试通用的自动恢复流程...\n\n{raw_msg}",
                     )
 
                     print("[执行动作] 调用 Alas & MuMu 检查恢复流程...")
@@ -298,14 +300,14 @@ def Handlepush(msg_dict: dict):
                         print("[修复结果] ❌ 未知错误修复失败")
                         PerseusErrorMsg(
                             "Recovery Failed",
-                            f"**Failed to resolve unknown error.** Please check system logs.{raw_msg}",
+                            f"❌ **[恢复失败]** 无法自动解决该未知错误，请手动检查日志。\n\n{raw_msg}",
                         )
                         return False
                     else:
                         print("[修复结果] 异常已顺利排查！")
                         PerseusNotifyMsg(
                             "Recovery Successful",
-                            f"**Unknown error** resolved successfully.{raw_msg}",
+                            f"✅ **[恢复成功]** **Unknown error** 已经排查并解决成功。\n\n{raw_msg}",
                         )
 
             else:
@@ -317,13 +319,13 @@ def Handlepush(msg_dict: dict):
                         print(f" -> 解析成功: 获得钻石 * {diamond_count}")
                         PerseusNotifyMsg(
                             "Gems Obtained!",
-                            f"**Gems commission successful!** Obtained Gems x`{diamond_count}`.{raw_msg}",
+                            f"💎 **[委托大成功]** **Gems commission successful!**\n\n- **获得奖励**: 💎 `x{diamond_count}`",
                         )
                     else:
                         print(" -> 解析成功: 获得钻石奖励（未匹配到具体数值）")
                         PerseusNotifyMsg(
                             "Gems Obtained!",
-                            f"**Gems commission successful!**{raw_msg}",
+                            f"💎 **[委托大成功]** **Gems commission successful!**\n\n{raw_msg}",
                         )
 
                 # 2. 判定行动力数值变化通知
@@ -336,15 +338,20 @@ def Handlepush(msg_dict: dict):
                         direction = match.group(2)
                         change_amount = match.group(3)
                         symbol = "-" if direction == "下跌" else "+"
-                        
+
                         notify_title = f"⚡ 行动力变化 ({symbol}{change_amount})"
-                        notify_body = f"**当前总行动力:** `{total_ap}`\n较上次{direction} `{change_amount}` 行动力{raw_msg}"
-                        
+                        notify_body = (
+                            f"⚡ **[AP 状态更新]**\n"
+                            f"- **当前总行动力**: `{total_ap}`\n"
+                            f"- **变动明细**: 较上次{direction} `{change_amount}` AP\n\n"
+                            f"{raw_msg}"
+                        )
+
                         print(f" -> 解析成功: 总AP {total_ap}, {direction} {change_amount}")
                         PerseusNotifyMsg(notify_title, notify_body)
                     else:
                         print(" -> 行动力变化未精确匹配，发送默认格式")
-                        PerseusNotifyMsg("⚡ 行动力出现变化", f"{body}{raw_msg}")
+                        PerseusNotifyMsg("⚡ 行动力出现变化", f"{body}\n\n{raw_msg}")
 
                 # 3. 判定行动力不足 / 低于最低保留通知
                 elif "行动力不足" in title or "低于最低保留" in title or "行动力不足" in body or "低于最低保留" in body:
@@ -355,43 +362,52 @@ def Handlepush(msg_dict: dict):
                         total_ap = match.group(1)
                         min_reserve = match.group(2)
                         action_taken = match.group(3).strip()
-                        
-                        notify_title = "⚠️ 行动力不足推送"
-                        notify_body = f"**当前总行动力** (`{total_ap}`) 低于最低保留限额 (`{min_reserve}`)。\n操作: {action_taken}{raw_msg}"
-                        
+
+                        notify_title = "⚠️ 行动力低于最低保留"
+                        notify_body = (
+                            f"⚠️ **[行动力不足预警]**\n"
+                            f"- **当前总行动力**: `{total_ap}`\n"
+                            f"- **最低保留限额**: `{min_reserve}`\n"
+                            f"- **已采取操作**: {action_taken}"
+                        )
+
                         print(f" -> 解析成功: 当前AP={total_ap}, 保留上限={min_reserve}, 处置={action_taken}")
                         PerseusNotifyMsg(notify_title, notify_body)
                     else:
                         print(" -> 低于保留值未精确匹配，发送默认通知")
-                        PerseusNotifyMsg("⚠️ 行动力低于最低保留", f"{body}{raw_msg}")
+                        PerseusNotifyMsg("⚠️ 行动力低于最低保留", f"{body}\n\n{raw_msg}")
 
                 # 4. 判定舰船经验检测报告
                 elif "舰船经验检测报告" in title:
                     print("[EXP Report] 收到舰船经验检测报告")
                     fleet_match = re.search(r"检测舰队:\s*(.+)", body)
                     unfilled_match = re.search(r"未满经验舰位:\s*(\d+)\s*艘", body)
-                    
+
                     fleet_name = fleet_match.group(1).strip() if fleet_match else "未知舰队"
                     unfilled_count = unfilled_match.group(1) if unfilled_match else "0"
-                    
+
                     # 提取各个舰位未满船只的情况
-                    # 匹配格式: 舰位2: Lv.105 | 经验：100,145 | 进度：44.3% │ 预计时间：46小时18分钟
                     ship_matches = re.findall(
                         r"舰位(\d+):\s*(Lv\.\d+)\s*\|\s*经验：([^\|]+)\s*\|\s*进度：([^│\|]+)\s*│\s*预计时间：([^\n]+)",
                         body
                     )
-                    
+
                     details = []
                     for pos, lv, exp, progress, eta in ship_matches:
                         progress_clean = progress.strip()
                         if progress_clean != "已满":
-                            details.append(f"• 舰位{pos} ({lv}): 进度 {progress_clean} (预计剩余 {eta.strip()})")
-                    
-                    detail_text = "\n".join(details) if details else "全员经验已满"
-                    
+                            details.append(f"  • **舰位 {pos}** (`{lv}`): 进度 `{progress_clean}` | ⏱️ 预计剩余 `{eta.strip()}`")
+
+                    detail_text = "\n".join(details) if details else "  • ✨ 全员经验已满"
+
                     notify_title = f"📊 经验检测报告 ({fleet_name})"
-                    notify_body = f"**未满经验舰位:** `{unfilled_count}` 艘\n{detail_text}{raw_msg}"
-                    
+                    notify_body = (
+                        f"📊 **[舰船经验检测报告]**\n"
+                        f"- **检测舰队**: `{fleet_name}`\n"
+                        f"- **未满经验舰位**: `{unfilled_count}` 艘\n\n"
+                        f"**详细进度**: \n{detail_text}"
+                    )
+
                     print(f" -> 解析成功: 舰队={fleet_name}, 未满={unfilled_count}艘")
                     PerseusNotifyMsg(notify_title, notify_body)
 
@@ -399,30 +415,34 @@ def Handlepush(msg_dict: dict):
                 elif "成功" in title or "成功" in body:
                     print("[Task Complete] 收到任务完成通知")
                     has_warning = "有可恢复错误" in title or "有可恢复错误" in body
-                    
+
                     # 尝试匹配任务名称: 任务 月度Boss ——成功
                     task_match = re.search(r"任务\s*([^\s—–-]+)", body)
                     if not task_match:
                         task_match = re.search(r"<alas>\s*([^\s—–-]+)\s*成功", title)
-                        
+
                     task_name = task_match.group(1).strip() if task_match else "自动化任务"
-                    
+
                     status_str = "成功 (存在待关注的可恢复错误)" if has_warning else "顺利完成"
                     icon = "⚠️" if has_warning else "✅"
-                    
+
                     notify_title = f"{icon} 任务完成: {task_name}"
-                    notify_body = f"AzurPilot 执行 Task **[{task_name}]** 结果: {status_str}。{raw_msg}"
-                    
+                    notify_body = (
+                        f"📌 **[任务执行报告]**\n"
+                        f"- **任务名称**: `{task_name}`\n"
+                        f"- **执行状态**: {status_str}"
+                    )
+
                     print(f" -> 解析成功: 任务={task_name}, 存在警告={has_warning}")
                     PerseusNotifyMsg(notify_title, notify_body)
 
                 # 6. 常规未特殊匹配消息，原样转发
                 else:
                     print("[日常通知] 常规推送消息，原样转发")
-                    PerseusNotifyMsg(title, f"{body}{raw_msg}")
+                    PerseusNotifyMsg(title, f"{body}")
         else:
             print("[未知通知] ，原样转发")
-            PerseusNotifyMsg(title, f"{body}{raw_msg}")
+            PerseusNotifyMsg(title, f"{body}")
 
         return True
 
@@ -440,7 +460,7 @@ def Handlepush(msg_dict: dict):
         # 发送报错内容通知
         PerseusErrorMsg(
             f"Handlepush Script Error [{error_type}]",
-            f"**Error processing push message:** `{error_detail}`\n\n**Original Push**\n- **Title:** {msg_dict.get('title', '')}\n- **Body:** {msg_dict.get('body', '')}",
+            f"❌ **[推送处理异常]** 处理消息时发生错误：\n> `{error_detail}`\n\n**原始消息：**\n- **标题:** {msg_dict.get('title', '')}\n- **内容:** {msg_dict.get('body', '')}",
         )
         return False
 
