@@ -422,6 +422,23 @@ def main(
         # 默认统一处理初始弹窗
         handle_initial_notices(page)
 
+        # 匹配仪表盘的内容并提取所有信息提交给 25566/main/ap/set
+        try:
+            dashboard_html = page.locator("#pywebio-scope-dashboard").inner_html(timeout=5000)
+            full_dashboard_html = f'<div id="pywebio-scope-dashboard" style="">{dashboard_html}</div>'
+            print("📊 成功捕获到仪表盘 HTML 内容，正在提交给 127.0.0.1:25566/main/ap/set ...")
+            req_data = json.dumps({"html": full_dashboard_html}).encode("utf-8")
+            req = urllib.request.Request(
+                "http://127.0.0.1:25566/main/ap/set",
+                data=req_data,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                print(f"✅ 仪表盘数据提交成功，响应状态码: {resp.status}")
+        except Exception as dash_err:
+            print(f"⚠️ 提取或提交仪表盘内容时出现异常: {dash_err}")
+
         # 顺序执行任务列表
         for task in task_list:
             ensure_alas_overview(page)

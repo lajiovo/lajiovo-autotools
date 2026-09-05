@@ -124,3 +124,55 @@ window.addEventListener('DOMContentLoaded', () => {
   function goToMainMenu() {
     window.location.href = '/main/';
   }
+
+  // 加载系统状态与仪表盘数据
+  async function loadSystemStatusAndDashboard() {
+    try {
+      // 1. 获取 /main/sv/get 状态
+      const svRes = await fetch('/main/sv/get');
+      if (svRes.ok) {
+        const svData = await svRes.json();
+        const data = svData.data || svData;
+        
+        const hpEl = document.getElementById('svHandlepush');
+        const mumuEl = document.getElementById('svMumu');
+        const alasEl = document.getElementById('svAlas');
+
+        if (hpEl) {
+          hpEl.textContent = data.handlepush ? '🟢 运行中' : '🔴 已暂停';
+          hpEl.style.color = data.handlepush ? '#10b981' : '#ef4444';
+        }
+        if (mumuEl) {
+          mumuEl.textContent = data.mumu_running ? '🟢 运行中' : '⚪ 未运行';
+          mumuEl.style.color = data.mumu_running ? '#10b981' : '#94a3b8';
+        }
+        if (alasEl) {
+          alasEl.textContent = data.alas_running ? '🟢 运行中' : '⚪ 未运行';
+          alasEl.style.color = data.alas_running ? '#10b981' : '#94a3b8';
+        }
+      }
+
+      // 2. 获取 /main/ap/get 仪表盘 HTML
+      const apRes = await fetch('/main/ap/get');
+      if (apRes.ok) {
+        const apData = await apRes.json();
+        const htmlContent = apData.html || (apData.data && apData.data.html);
+        const container = document.getElementById('dashboardContainer');
+        if (container) {
+          if (htmlContent && htmlContent.trim() !== '') {
+            container.innerHTML = htmlContent;
+          } else {
+            container.innerHTML = '<p style="color: #94a3b8; font-size: 0.85rem; text-align: center;">暂无仪表盘缓存数据，请先执行 Playwright 任务获取。</p>';
+          }
+        }
+      }
+    } catch (e) {
+      console.error('加载系统状态或仪表盘失败:', e);
+    }
+  }
+
+  // 页面加载完成后自动加载一次，并每 10 秒自动轮询更新
+  window.addEventListener('DOMContentLoaded', () => {
+    loadSystemStatusAndDashboard();
+    setInterval(loadSystemStatusAndDashboard, 10000);
+  });

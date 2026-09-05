@@ -20,6 +20,35 @@
     <!-- 左侧：功能选项面板 -->
     <div class="options-pane">
       
+      <!-- 实时服务与仪表盘数据展示卡片 -->
+      <div class="card" style="background: linear-gradient(135deg, rgba(30,41,59,0.85), rgba(15,23,42,0.9)); border: 1px solid rgba(99,102,241,0.3);">
+        <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+          <span>📊 系统运行状态与仪表盘监控</span>
+          <button class="btn-primary" style="padding: 2px 8px; font-size: 0.7rem;" onclick="loadSystemStatusAndDashboard()">🔄 刷新数据</button>
+        </div>
+        
+        <!-- 服务状态指示条 -->
+        <div id="serviceStatusIndicator" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; padding: 4px 0;">
+          <div style="background: rgba(15,23,42,0.6); padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); text-align: center;">
+            <div style="font-size: 0.75rem; color: #94a3b8;">HandlePush</div>
+            <div id="svHandlepush" style="font-size: 0.85rem; font-weight: bold; margin-top: 2px; color: #f59e0b;">检查中...</div>
+          </div>
+          <div style="background: rgba(15,23,42,0.6); padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); text-align: center;">
+            <div style="font-size: 0.75rem; color: #94a3b8;">MuMu 进程</div>
+            <div id="svMumu" style="font-size: 0.85rem; font-weight: bold; margin-top: 2px; color: #94a3b8;">检查中...</div>
+          </div>
+          <div style="background: rgba(15,23,42,0.6); padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); text-align: center;">
+            <div style="font-size: 0.75rem; color: #94a3b8;">Alas 进程</div>
+            <div id="svAlas" style="font-size: 0.85rem; font-weight: bold; margin-top: 2px; color: #94a3b8;">检查中...</div>
+          </div>
+        </div>
+
+        <!-- 仪表盘 HTML 容器 -->
+        <div id="dashboardContainer" style="background: rgba(15,23,42,0.5); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); max-height: 320px; overflow-y: auto;">
+          <p style="color: #94a3b8; font-size: 0.85rem; text-align: center;">正在加载仪表盘缓存数据...</p>
+        </div>
+      </div>
+
       <!-- 基础控制功能卡片网格 -->
       <div class="grid-cards">
         <!-- 核心控制 -->

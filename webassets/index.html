@@ -129,6 +129,42 @@
                 </div>
             </div>
 
+            <!-- 实时服务与仪表盘数据展示区块 -->
+            <div class="glass-panel rounded-2xl p-5 mb-4 shadow-lg border border-indigo-500/20">
+                <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-200/60 dark:border-slate-800/80">
+                    <div class="flex items-center gap-2">
+                        <div class="w-7 h-7 rounded-lg bg-indigo-500/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-sm">
+                            <i class="fa-solid fa-chart-pie"></i>
+                        </div>
+                        <h3 class="font-bold text-slate-900 dark:text-white text-sm sm:text-base">系统服务与仪表盘状态实时监控</h3>
+                    </div>
+                    <button onclick="loadIndexSystemStatusAndDashboard()" class="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 px-2.5 py-1 rounded-md transition-colors shadow-sm">
+                        <i class="fa-solid fa-rotate"></i> 刷新数据
+                    </button>
+                </div>
+
+                <!-- 状态指示网格 -->
+                <div id="indexServiceStatus" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                    <div class="bg-slate-100/60 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                        <span class="text-xs text-slate-500 dark:text-slate-400 font-medium">HandlePush 状态</span>
+                        <span id="indexSvHandlepush" class="text-xs font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">检查中...</span>
+                    </div>
+                    <div class="bg-slate-100/60 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                        <span class="text-xs text-slate-500 dark:text-slate-400 font-medium">MuMu 进程状态</span>
+                        <span id="indexSvMumu" class="text-xs font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">检查中...</span>
+                    </div>
+                    <div class="bg-slate-100/60 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                        <span class="text-xs text-slate-500 dark:text-slate-400 font-medium">Alas 进程状态</span>
+                        <span id="indexSvAlas" class="text-xs font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">检查中...</span>
+                    </div>
+                </div>
+
+                <!-- 仪表盘 HTML 缓存容器 -->
+                <div id="indexDashboardContainer" class="bg-slate-100/40 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200/50 dark:border-slate-800 overflow-x-auto">
+                    <p class="text-xs text-slate-500 dark:text-slate-400 text-center py-2">正在加载仪表盘缓存数据...</p>
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
                 
                 <!-- Card 1: 仪表盘 -->
@@ -487,6 +523,53 @@
         // Initialize theme and target mode on page load
         initTheme();
         applyTargetMode();
+
+        // --- 6. Load System Status and Dashboard on Index ---
+        async function loadIndexSystemStatusAndDashboard() {
+            try {
+                const svRes = await fetch('/main/sv/get');
+                if (svRes.ok) {
+                    const svData = await svRes.json();
+                    const data = svData.data || svData;
+
+                    const hpEl = document.getElementById('indexSvHandlepush');
+                    const mumuEl = document.getElementById('indexSvMumu');
+                    const alasEl = document.getElementById('indexSvAlas');
+
+                    if (hpEl) {
+                        hpEl.textContent = data.handlepush ? '🟢 运行中' : '🔴 已暂停';
+                        hpEl.className = data.handlepush ? 'text-xs font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-xs font-bold px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300';
+                    }
+                    if (mumuEl) {
+                        mumuEl.textContent = data.mumu_running ? '🟢 运行中' : '⚪ 未运行';
+                        mumuEl.className = data.mumu_running ? 'text-xs font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-xs font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
+                    }
+                    if (alasEl) {
+                        alasEl.textContent = data.alas_running ? '🟢 运行中' : '⚪ 未运行';
+                        alasEl.className = data.alas_running ? 'text-xs font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-xs font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300';
+                    }
+                }
+
+                const apRes = await fetch('/main/ap/get');
+                if (apRes.ok) {
+                    const apData = await apRes.json();
+                    const htmlContent = apData.html || (apData.data && apData.data.html);
+                    const container = document.getElementById('indexDashboardContainer');
+                    if (container) {
+                        if (htmlContent && htmlContent.trim() !== '') {
+                            container.innerHTML = htmlContent;
+                        } else {
+                            container.innerHTML = '<p class="text-xs text-slate-500 dark:text-slate-400 text-center py-2">暂无仪表盘缓存数据，请先执行任务获取。</p>';
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('加载首页系统状态或仪表盘失败:', e);
+            }
+        }
+
+        loadIndexSystemStatusAndDashboard();
+        setInterval(loadIndexSystemStatusAndDashboard, 10000);
     </script>
 </body>
 </html>

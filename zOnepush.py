@@ -690,6 +690,69 @@ def parse_pushlog_span(span):
         return n, n
     return None, None
 
+# ==================== 仪表盘缓存与路由 (servercache/ap) ====================
+
+AP_DIR = os.path.join(BASE_DIR, "servercache", "ap")
+os.makedirs(AP_DIR, exist_ok=True)
+
+def get_ap_html_path():
+    return os.path.join(AP_DIR, "dashboard.html")
+
+@app.route("/main/ap/set", methods=["POST"])
+def handle_ap_set():
+    """接收并保存仪表盘 HTML 内容到 servercache/ap/dashboard.html"""
+    try:
+        req_data = _collect_request_dict()
+        html_content = req_data.get("html")
+        if not html_content and request.is_json:
+            j = request.get_json(silent=True)
+            if j:
+                html_content = j.get("html")
+        if not html_content:
+            html_content = request.form.get("html") or request.data.decode("utf-8", errors="ignore")
+
+        if html_content:
+            with open(get_ap_html_path(), "w", encoding="utf-8") as f:
+                f.write(html_content)
+            return format_response({"status": "ok", "message": "仪表盘缓存保存成功"}, 200)
+        return format_response({"status": "error", "message": "缺少 html 内容"}, 400)
+    except Exception as e:
+        return format_response({"status": "error", "message": str(e)}, 500)
+
+@app.route("/main/ap/get", methods=["GET"])
+def handle_ap_get():
+    """读取并返回仪表盘缓存的 HTML 内容"""
+    path = get_ap_html_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            return format_response({"status": "ok", "html": html_content}, 200)
+        except Exception as e:
+            return format_response({"status": "error", "message": str(e)}, 500)
+    return format_response({"status": "ok", "html": ""}, 200)
+
+@app.route("/main/sv/get", methods=["GET"])
+def handle_sv_get():
+    """返回 HANDLEPUSH状态，zMumu.is_mumu_running()，zAlas.is_process_running()"""
+    try:
+        mumu_running = zMumu.is_mumu_running()
+    except Exception:
+        mumu_running = False
+
+    try:
+        alas_running = zAlas.is_process_running()
+    except Exception:
+        alas_running = False
+
+    return format_response({
+        "status": "ok",
+        "handlepush": HANDLEPUSH,
+        "mumu_running": mumu_running,
+        "alas_running": alas_running
+    }, 200)
+
+
 # ==================== 剪切板缓存与文件管理 (servercache/clipboard) ====================
 
 CLIPBOARD_DIR = os.path.join(BASE_DIR, "servercache", "clipboard")

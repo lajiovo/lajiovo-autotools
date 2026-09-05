@@ -43,6 +43,17 @@ def elevate_privileges():
         sys.exit(0)
 
 
+def is_process_running():
+    """检查 TARGET_PROCESS 是否正在运行"""
+    for proc in psutil.process_iter(['name']):
+        try:
+            if proc.info['name'] and proc.info['name'].lower() == TARGET_PROCESS.lower():
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return False
+
+
 def is_site_accessible(url="http://127.0.0.1:22267"):
     """轻量级检查目标网页是否可访问"""
     try:

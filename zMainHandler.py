@@ -530,8 +530,11 @@ def handlerun(data: dict):
                 res = zAlas.hide()
                 return [True, f"zAlas.hide() -> {res}"]
             elif "online" in task:
-                res = zAlas.is_site_accessible()
+                res = zAlas.is_process_running()
                 return [True, f"zAlas.is_process_running() -> {res}"]
+            elif "ping" in task:
+                res = zAlas.is_site_accessible()
+                return [True, f"zAlas.is_site_accessible() -> {res}"]
 
         # 2. 处理 MuMu 相关任务
         elif "mumu" in task:
