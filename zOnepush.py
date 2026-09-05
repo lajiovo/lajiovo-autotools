@@ -18,6 +18,7 @@ import zPGRJZ
 import zMusicDL
 import win32gui
 import win32con
+import win32clipboard
 from zFfmpeg import process_audio as ffmrun
 import asyncio
 import zCpolar
@@ -688,6 +689,104 @@ def parse_pushlog_span(span):
         n = int(text)
         return n, n
     return None, None
+
+# ==================== 剪切板缓存与文件管理 (servercache/clipboard) ====================
+
+CLIPBOARD_DIR = os.path.join(BASE_DIR, "servercache", "clipboard")
+os.makedirs(CLIPBOARD_DIR, exist_ok=True)
+
+def get_clipboard_text_path():
+    return os.path.join(CLIPBOARD_DIR, "content.txt")
+
+def read_clipboard_cache():
+    text_path = get_clipboard_text_path()
+    text_content = ""
+    if os.path.exists(text_path):
+        try:
+            with open(text_path, "r", encoding="utf-8") as f:
+                text_content = f.read()
+        except Exception:
+            pass
+            
+    images = []
+    if os.path.exists(CLIPBOARD_DIR):
+        try:
+            valid_exts = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+            files = sorted(os.listdir(CLIPBOARD_DIR), key=lambda x: os.path.getmtime(os.path.join(CLIPBOARD_DIR, x)), reverse=True)
+            for f in files:
+                if f.lower().endswith(valid_exts):
+                    images.append(f)
+        except Exception:
+            pass
+            
+    return {"text": text_content, "images": images}
+
+@app.route("/clipboard/file/<path:filename>", methods=["GET"])
+def serve_clipboard_file(filename):
+    """访问 servercache/clipboard 文件夹中的缓存图片/文件"""
+    return send_from_directory(CLIPBOARD_DIR, filename)
+
+@app.route("/clipboard", methods=["GET", "POST"])
+def handle_clipboard():
+    """
+    剪贴板与缓存路由 /clipboard：
+    GET: 返回当前缓存的文本内容与图片列表
+    POST: 
+      - 保存文本: 传 text 或 content
+      - 上传图片: multipart/form-data 文件域 file
+      - 删除文件: action=delete & filename=xxx
+    """
+    if request.method == "GET":
+        data = read_clipboard_cache()
+        return format_response({"status": "ok", **data}, 200)
+    else:
+        req_data = _collect_request_dict()
+        action = req_data.get("action")
+        
+        # 1. 删除文件请求
+        if action == "delete":
+            filename = req_data.get("filename")
+            if filename:
+                # 防止目录遍历攻击
+                safe_name = os.path.basename(filename)
+                target_file = os.path.join(CLIPBOARD_DIR, safe_name)
+                if os.path.exists(target_file) and os.path.isfile(target_file):
+                    try:
+                        os.remove(target_file)
+                        return format_response({"status": "ok", "message": f"文件 {safe_name} 已删除", **read_clipboard_cache()}, 200)
+                    except Exception as e:
+                        return format_response({"status": "error", "message": f"删除文件失败: {e}"}, 500)
+            return format_response({"status": "error", "message": "未指定有效文件名"}, 400)
+
+        # 2. 处理文件上传（图片）
+        if 'file' in request.files:
+            file = request.files['file']
+            if file and file.filename:
+                original_name = file.filename
+                ext = os.path.splitext(original_name)[1]
+                timestamp_name = f"{int(time.time() * 1000)}{ext}"
+                save_path = os.path.join(CLIPBOARD_DIR, timestamp_name)
+                try:
+                    file.save(save_path)
+                    return format_response({"status": "ok", "message": "图片上传成功", "filename": timestamp_name, **read_clipboard_cache()}, 200)
+                except Exception as e:
+                    return format_response({"status": "error", "message": f"图片保存失败: {e}"}, 500)
+
+        # 3. 处理文本更新
+        text = req_data.get("text")
+        if text is None:
+            text = req_data.get("content")
+            
+        if text is not None:
+            text_path = get_clipboard_text_path()
+            try:
+                with open(text_path, "w", encoding="utf-8") as f:
+                    f.write(str(text))
+                return format_response({"status": "ok", "message": "文本缓存更新成功", **read_clipboard_cache()}, 200)
+            except Exception as e:
+                return format_response({"status": "error", "message": f"文本保存失败: {e}"}, 500)
+
+        return format_response({"status": "error", "message": "无效的请求参数或没有提供有效负载"}, 400)
 
 # 推送接收接口
 @app.route("/push", methods=["GET", "POST"])

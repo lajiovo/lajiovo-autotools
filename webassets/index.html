@@ -191,6 +191,26 @@
                     </div>
                 </div>
 
+                <!-- Card 4: 云端剪切板 -->
+                <div class="service-card glass-panel rounded-xl p-4 card-hover relative group flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-2.5">
+                            <div class="w-9 h-9 rounded-lg bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-base">
+                                <i class="fa-solid fa-clipboard"></i>
+                            </div>
+                            <span class="text-[9px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded">Cache</span>
+                        </div>
+                        <h3 class="font-bold text-slate-900 dark:text-white text-sm mb-1">云端剪切板</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mb-3 line-clamp-2">跨设备文本及图片缓存与同步中心。</p>
+                    </div>
+                    <div class="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
+                        <code class="text-[10px] text-slate-400 truncate max-w-[120px]">/main/clipboard.html</code>
+                        <a href="/main/clipboard.html" target="_self" class="service-link inline-flex items-center gap-1 text-[11px] font-medium text-white bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1 rounded-md transition-colors shadow-sm">
+                            访问 <i class="fa-solid fa-chevron-right text-[9px]"></i>
+                        </a>
+                    </div>
+                </div>
+
             </div>
         </section>
 
@@ -288,7 +308,29 @@
                         <button onclick="copyToClipboard('http://192.168.10.3:37777')" class="text-[10px] text-slate-400 hover:text-rose-500 transition-colors flex items-center gap-1">
                             <i class="fa-regular fa-copy"></i> 复制
                         </button>
-                        <a href="http://192.168.10.3:37777" target="_self" class="service-link inline-flex items-center gap-1 text-[11px] font-medium text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900/80 border border-rose-200 dark:border-rose-800/50 px-2 py-0.5 rounded-md transition-colors">
+                        <a href="http://192.168.10.3:37777" target="_self" class="service-link inline-flex items-center gap-1 text-[11px] font-medium text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-indigo-900/80 border border-rose-200 dark:border-rose-800/50 px-2 py-0.5 rounded-md transition-colors">
+                            直连 <i class="fa-solid fa-chevron-right text-[8px]"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Card 5: 云端剪切板 (192.168.10.3:25566) -->
+                <div class="service-card glass-panel rounded-xl p-4 card-hover relative group flex flex-col justify-between border-l-2 border-l-emerald-500">
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="w-8 h-8 rounded-lg bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">
+                                <i class="fa-solid fa-clipboard"></i>
+                            </div>
+                            <span class="text-xs font-mono font-bold text-slate-500 dark:text-slate-400">:25566</span>
+                        </div>
+                        <h3 class="font-bold text-slate-900 dark:text-white text-sm mb-0.5">云端剪切板</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400 mb-2">192.168.10.3:25566</p>
+                    </div>
+                    <div class="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
+                        <button onclick="copyToClipboard('http://192.168.10.3:25566/main/clipboard.html')" class="text-[10px] text-slate-400 hover:text-emerald-500 transition-colors flex items-center gap-1">
+                            <i class="fa-regular fa-copy"></i> 复制
+                        </button>
+                        <a href="http://192.168.10.3:25566/main/clipboard.html" target="_self" class="service-link inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/80 border border-emerald-200 dark:border-emerald-800/50 px-2 py-0.5 rounded-md transition-colors">
                             直连 <i class="fa-solid fa-chevron-right text-[8px]"></i>
                         </a>
                     </div>
