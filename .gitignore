@@ -1,5 +1,5 @@
 # 1. 忽略特定文件夹
-cache/
+brocache/
 lkcache/
 logs/
 .vs/

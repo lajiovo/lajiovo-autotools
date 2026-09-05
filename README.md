@@ -90,8 +90,10 @@ Perseus/
 │   ├── suoha.png             # 示例图片
 │   ├── botpy.log             # botpy的日志文件
 │   └── yz.py                 # 云崽 Bot接入
-├── cache/                    # zBrowser的文件
+├── brocache/                 # zBrowser的文件
 ├── servercache/              # 大本营的缓存文件
+│   ├── clipboard/            # clipboard缓存
+│   └── pushlog/              # push消息日志
 ├── browser_downloads/        # zBrowser的下载文件
 ├── lkcache/                  # LK板块的缓存文件
 │   └── <book-name>/          # 单书籍缓存

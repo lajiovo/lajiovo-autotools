@@ -5,7 +5,7 @@ from zConfig import get_config
 
 async def run():
     current_dir = Path(__file__).parent.resolve()
-    user_data_dir = current_dir / "cache"
+    user_data_dir = current_dir / "brocache"
     
     # 确保下载目录为绝对路径并自动创建，防止因目录不存在导致下载失败
     download_dir = current_dir / "browser_downloads"
