@@ -768,9 +768,9 @@ async def handle_op_command(
         if not push_args:
             content = "📬 **【Push 推送选择】**\n请选择级别与读取范围："
             kb = [
-                [("📢通知", "#op push get notify 1-3"), ("⚠️警告", "#op push get warning 1-3"), ("❌错误", "#op push get error 1-3")],
-                [("📩最新", "#op push get notify 1"), ("📩前二", "#op push get notify 1-2"), ("📩前三", "#op push get notify 1-3")],
-                [("📩四五", "#op push get notify 4-5"), ("📩六七", "#op push get notify 6-7")],
+                [("📢通知 1-3", "#op push get notify 1-3"), ("📢通知 4-6", "#op push get notify 4-6"), ("📢通知 7-9", "#op push get notify 7-9")],
+                [("⚠️警告 1-3", "#op push get warning 1-3"), ("⚠️警告 4-6", "#op push get warning 4-6"), ("⚠️警告 7-9", "#op push get warning 7-9")],
+                [("❌错误 1-3", "#op push get error 1-3"), ("❌错误 4-6", "#op push get error 4-6"), ("❌错误 7-9", "#op push get error 7-9")],
             ]
             return _format_msg_type_2(content, kb)
 
